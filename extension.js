@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.4.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.5.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -23,7 +23,7 @@
   const hash = t => { let h = 2166136261; for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 16777619) >>> 0; return h.toString(36); };
 
   // ---------- 저장 ----------
-  const initial = () => ({ v: 1, at: 0, world: '', worlds: {}, global: { enabled: true, volume: 1, interrupt: true, prefetch: false, stripTags: true }, lore: { id: '', name: '', entryId: '', error: '' } });
+  const initial = () => ({ v: 1, at: 0, world: '', worlds: {}, global: { enabled: true, volume: 1, interrupt: true, prefetch: false, stripTags: true, serverCache: true }, lore: { id: '', name: '', entryId: '', error: '' } });
   let data;
   try { data = JSON.parse(localStorage.getItem(STORE) || 'null') || initial(); } catch { data = initial(); }
   if (!data || data.v !== 1 || typeof data.worlds !== 'object') data = initial();
@@ -94,19 +94,55 @@
     t = t.replace(/^(["“「『])([\s\S]*)(["”」』])$/, '$2').trim();
     return t;
   }
+  // 만든 음성은 마리나라 서버의 게임 에셋 폴더(sfx/.gacha-tts)에 mp3로 남겨, 다른 기기나 새로고침 뒤에도 다시 만들지 않습니다.
+  // 점(.)으로 시작하는 폴더는 게임 에셋 목록에서 빠지므로 게임 효과음·음악 선택에 섞이지 않습니다.
+  const SERVER_DIR = 'sfx/.gacha-tts';
+  function serverName(voice, text) {
+    const s = voice + '\u0000' + text, pad = h => h.padStart(7, '0');
+    return pad(hash(s)) + pad(hash('gtts\u0000' + s)) + s.length.toString(36);
+  }
+  function authHeaders(extra) {
+    let admin = ''; try { admin = String(localStorage.getItem('marinara_admin_secret') || '').trim(); } catch {}
+    return { 'x-marinara-csrf': '1', ...(admin ? { 'X-Admin-Secret': admin } : {}), ...extra };
+  }
+  async function serverGet(name) {
+    const r = await fetch('/api/game-assets/file/' + SERVER_DIR + '/' + name.slice(0, 2) + '/' + name + '.mp3', { credentials: 'same-origin', headers: authHeaders() });
+    if (!r.ok) return null;
+    const blob = await r.blob();
+    return blob.size ? blob : null;
+  }
+  async function serverPut(name, blob) {
+    const form = new FormData();
+    form.append('category', 'sfx');
+    form.append('subcategory', SERVER_DIR.slice(4) + '/' + name.slice(0, 2));
+    form.append('file', blob, name + '.mp3');
+    const r = await fetch('/api/game-assets/upload', { method: 'POST', credentials: 'same-origin', headers: authHeaders(), body: form });
+    if (!r.ok && r.status !== 409) throw Error('서버에 음성을 저장하지 못했습니다 (HTTP ' + r.status + ')');
+    stats.saved++;
+  }
+  const stats = { server: 0, made: 0, saved: 0, saveError: '' };
   function fetchClip(voice, text, speaker) {
     const k = clipKey(voice, text);
     if (clips.has(k)) return clips.get(k);
     const p = (async () => {
-      let admin = ''; try { admin = String(localStorage.getItem('marinara_admin_secret') || '').trim(); } catch {}
+      const useServer = data.global.serverCache !== false, name = serverName(voice, text);
+      if (useServer) {
+        const saved = await serverGet(name).catch(() => null);
+        if (saved) { stats.server++; return URL.createObjectURL(saved); }
+      }
       const r = await fetch('/api/tts/speak', {
         method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', 'x-marinara-csrf': '1', 'X-Marinara-TTS-Line': '1', ...(admin ? { 'X-Admin-Secret': admin } : {}) },
+        headers: authHeaders({ 'Content-Type': 'application/json', 'X-Marinara-TTS-Line': '1' }),
         body: JSON.stringify({ text, voice, ...(speaker ? { speaker } : {}) }),
       });
       if (!r.ok) { const j = await r.json().catch(() => null); throw Error(j?.error || ('음성 생성 실패 (HTTP ' + r.status + ')')); }
       const blob = await r.blob();
       if (!blob.size) throw Error('음성 응답이 비어 있습니다.');
+      stats.made++;
+      // mp3만 서버에 남깁니다. 저장 실패는 재생을 막지 않습니다.
+      if (useServer && /mpeg|mp3/i.test(blob.type || r.headers.get('content-type') || 'audio/mpeg')) {
+        serverPut(name, blob).then(() => { stats.saveError = ''; }, e => { stats.saveError = String(e.message || e); console.warn('[가챠 TTS]', stats.saveError); }).finally(refresh);
+      }
       return URL.createObjectURL(blob);
     })();
     clips.set(k, p);
@@ -622,7 +658,9 @@
         toggle('data-g="enabled"', G.enabled, '확장 사용') +
         toggle('data-g="interrupt"', G.interrupt, '넘기면 음성 멈춤', '다음 대사로 넘기면 재생 중인 음성을 멈춥니다') +
         toggle('data-g="prefetch"', G.prefetch, '다음 대사 미리 만들기', '빨라지지만 건너뛴 대사도 요금이 듭니다') +
-        toggle('data-g="stripTags"', G.stripTags, '화면에서 감정 태그 숨기기') + '</div>' +
+        toggle('data-g="stripTags"', G.stripTags, '화면에서 감정 태그 숨기기') +
+        toggle('data-g="serverCache"', G.serverCache !== false, '만든 음성을 서버에 저장', '기기를 바꾸거나 새로고침해도 같은 대사는 다시 만들지 않습니다') + '</div>' +
+        (G.serverCache !== false ? '<p class="gtts-sub">이번 접속: 서버에서 불러옴 <b>' + stats.server + '</b> · 새로 만듦 <b>' + stats.made + '</b> · 서버에 저장 <b>' + stats.saved + '</b>' + (stats.saveError ? ' · <span class="gtts-bad">' + esc(stats.saveError) + '</span>' : '') + '</p><p class="gtts-sub">저장 위치: 마리나라 데이터 폴더의 game-assets/sfx/.gacha-tts (게임 효과음 목록에는 나오지 않습니다)</p>' : '') +
         '<div class="ob-field"><div class="ob-labelrow"><label>음량</label></div><input type="range" min="0" max="1" step="0.05" data-g="volume" value="' + esc(G.volume) + '"></div>' +
         configHtml());
     view.root.scrollTop = keep;
@@ -760,5 +798,5 @@
   new MutationObserver(() => { if (!gameRoot || !gameHost?.isConnected) mount(); }).observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncPull(); else stop(); });
 
-  globalThis.__gfTts = { upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
+  globalThis.__gfTts = { clips, fetchClip, upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
 })();

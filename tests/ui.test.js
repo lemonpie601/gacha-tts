@@ -2,11 +2,11 @@
 const {JSDOM}=require('jsdom'),fs=require('fs'),assert=require('assert');
 const src=fs.readFileSync(process.argv[2]||require('path').join(__dirname,'..','extension.js'),'utf8');
 const dom=new JSDOM('<!doctype html><body></body>',{url:'https://local.test/',runScripts:'outside-only'});
-const win=dom.window,doc=win.document;win.Response=Response;win.Headers=Headers;win.Blob=Blob;
+const win=dom.window,doc=win.document;win.Response=Response;win.FormData=FormData;win.Headers=Headers;win.Blob=Blob;
 win.HTMLDialogElement.prototype.showModal=function(){this.open=true};win.HTMLDialogElement.prototype.close=function(){this.open=false};
 const native=[];win.alert=m=>native.push(['alert',m]);win.confirm=m=>{native.push(['confirm',m]);return true;};win.prompt=m=>{native.push(['prompt',m]);return null;};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const calls=[];let entryContent="";let runLore={worldIds:['other'],castIds:[],worldBudget:6000,castBudget:null,beat:false};
+const calls=[];const assets=new Map();let entryContent="";let runLore={worldIds:['other'],castIds:[],worldBudget:6000,castBudget:null,beat:false};
 const json=(v,ok=true)=>new win.Response(JSON.stringify(v),{status:ok?200:404,headers:{'content-type':'application/json'}});
 const played=[];
 win.URL.createObjectURL=()=>'blob:x';win.URL.revokeObjectURL=()=>{};
@@ -21,6 +21,8 @@ win.fetch=async(u,o={})=>{u=String(u);calls.push([o.method||'GET',u,o.body]);
   if(u.endsWith('/api/lorebooks/lb1'))return json({id:'lb1'});
   if(u.includes('/api/tts/config'))return json({enabled:true,source:'elevenlabs',model:'eleven_v3',skipBracketedText:true});
   if(u.includes('/api/tts/voices'))return json({voiceOptions:[{id:'v1',name:'민수'},{id:'v2',name:'지아'}]});
+  if(u.startsWith('/api/game-assets/file/')){const b=assets.get(u.slice(22));return b?new win.Response(b,{status:200,headers:{'content-type':'audio/mpeg'}}):json({error:'Asset not found'},false);}
+  if(u==='/api/game-assets/upload'){const f=o.body;const path=f.get('category')+'/'+f.get('subcategory')+'/'+f.get('file').name;assets.set(path,f.get('file'));return json({path});}
   if(u.includes('/api/tts/speak'))return new win.Response(new win.Blob(['abc']),{status:200});
   return json({},false);};
 const host=doc.createElement('marinara-capability-gacha-forge');doc.body.append(host);
@@ -52,9 +54,21 @@ win.eval(src);
   lb().click();await sleep(20);assert.ok(!lb().hasAttribute('data-on')&&lb().textContent.includes('듣기'),'stopped');
   lb().click();await sleep(50);
   assert.strictEqual(played.length,2,'replayed');assert.strictEqual(calls.filter(c=>c[1].includes('/api/tts/speak')).length,1,'cached');
+  // generated clip is saved on the server under the hidden sfx folder
+  await sleep(50);
+  assert.strictEqual(assets.size,1,'uploaded once');const [apath]=[...assets.keys()];
+  assert.ok(/^sfx\/\.gacha-tts\/[0-9a-z]{2}\/[0-9a-z]+\.mp3$/.test(apath),'hidden folder path '+apath);
+  // another device / reload: memory empty, clip comes from the server, no new generation
+  T.clips.clear();const before=calls.filter(c=>c[1].includes('/api/tts/speak')).length;
+  await T.fetchClip('v1','[excited] 가자! [whispers] 조용히.','한도윤');
+  assert.strictEqual(calls.filter(c=>c[1].includes('/api/tts/speak')).length,before,'served from server, not regenerated');
+  assert.strictEqual(assets.size,1,'no duplicate upload');
+  // different tags = different clip
+  T.clips.clear();await T.fetchClip('v1','[sad] 가자! 조용히.','한도윤');
+  assert.strictEqual(calls.filter(c=>c[1].includes('/api/tts/speak')).length,before+1);await sleep(30);assert.strictEqual(assets.size,2);
   // narration not read by default
   sr.querySelector('.vn-line').textContent='바람이 분다.';sr.querySelector('.vn-count').textContent='01 / 3';await sleep(400);
-  assert.strictEqual(calls.filter(c=>c[1].includes('/api/tts/speak')).length,1,'narration skipped');
+  assert.strictEqual(calls.filter(c=>c[1].includes('/api/tts/speak')).length,before+1,'narration skipped');
   // GF settings screen: our tab goes in the rail and replaces the pane while open
   win.Element.prototype.getClientRects=function(){return [1];};
   sr.querySelector('.bar').insertAdjacentHTML('afterend','<div data-screen="settings"><div class="head-id"><h2>자료</h2></div><nav class="st-rail"><button class="st-sect" role="tab" aria-selected="true"><span class="k">세계</span><span class="n">자료</span></button></nav><div class="st-pane"><div class="st-plate" id="native">자료 내용</div></div></div>');
