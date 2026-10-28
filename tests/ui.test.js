@@ -25,7 +25,7 @@ const host=doc.createElement('marinara-capability-gacha-forge');doc.body.append(
 const sr=host.attachShadow({mode:'open'});sr.innerHTML='<div class="bar"><button class="gf-fs-bar icon-button">⛶</button></div><div class="vn"><span class="vn-caption">3챕터 · 공방</span><p class="vn-line">…</p><span class="vn-count">01 / 3</span></div>';
 win.eval(src);
 (async()=>{
-  assert.ok(sr.querySelector('[data-gtts="speak"]')&&sr.querySelector('[data-gtts="panel"]'),'buttons');
+  assert.ok(sr.querySelector('[data-gtts="speak"]'),'speak button');
   const r=await win.fetch('/api/gacha-forge/beat',{method:'POST',body:JSON.stringify({runId:'run-1',chapter:3,storyIndex:0})});
   const j=await r.json();
   assert.strictEqual(j.segments[1].text,'가자! 조용히.','tags stripped for display');
@@ -47,19 +47,31 @@ win.eval(src);
   // narration not read by default
   sr.querySelector('.vn-line').textContent='바람이 분다.';sr.querySelector('.vn-count').textContent='01 / 3';await sleep(400);
   assert.strictEqual(calls.filter(c=>c[1].includes('/api/tts/speak')).length,1,'narration skipped');
-  // panel settings tab
-  sr.querySelector('[data-gtts="panel"]').click();await sleep(50);
-  const panel=doc.getElementById('gtts-panel');assert.ok(panel.open);
-  panel.querySelector('[data-tab="settings"]').click();await sleep(50);
-  assert.ok(panel.innerHTML.includes('서울 월드')&&panel.innerHTML.includes('인물별 보이스')&&panel.innerHTML.includes('연결됨'),'settings html');
-  const sel=panel.querySelector('select[data-spk="홍길동"]');sel.value='v2';sel.dispatchEvent(new win.Event('change',{bubbles:true}));
+  // GF settings screen: our tab goes in the rail and replaces the pane while open
+  win.Element.prototype.getClientRects=function(){return [1];};
+  sr.querySelector('.bar').insertAdjacentHTML('afterend','<div data-screen="settings"><div class="head-id"><h2>자료</h2></div><nav class="st-rail"><button class="st-sect" role="tab" aria-selected="true"><span class="k">세계</span><span class="n">자료</span></button></nav><div class="st-pane"><div class="st-plate" id="native">자료 내용</div></div></div>');
+  await sleep(150);
+  const tab=sr.querySelector('.st-rail [data-gtts="tab"]');assert.ok(tab,'tts tab added to rail');
+  assert.ok(tab.textContent.includes('TTS'));
+  tab.click();await sleep(50);
+  const viewEl=sr.querySelector('.st-pane [data-gtts-view]');assert.ok(viewEl,'view mounted in pane');
+  assert.strictEqual(sr.getElementById('native').style.display,'none','native pane hidden');
+  assert.strictEqual(tab.getAttribute('aria-selected'),'true');assert.strictEqual(sr.querySelector('.head-id h2').textContent,'TTS');
+  await sleep(50);
+  const html=viewEl.innerHTML;
+  assert.ok(html.includes('서울 월드')&&html.includes('인물별 보이스')&&html.includes('연결됨')&&html.includes('대괄호 건너뛰기 끄기'),'settings html');
+  const sel=viewEl.querySelector('select[data-spk="홍길동"]');sel.value='v2';sel.dispatchEvent(new win.Event('change',{bubbles:true}));
   assert.strictEqual(T.data.worlds['run-1'].speakers['홍길동'].voice,'v2');
-  panel.querySelector('[data-tab="common"]').click();await sleep(50);
-  assert.ok(panel.innerHTML.includes('대괄호 건너뛰기 끄기'));
-  // disconnect via emotion checkbox
-  panel.querySelector('[data-tab="settings"]').click();await sleep(20);
-  const cb=panel.querySelector('input[data-w="emotion"]');cb.checked=false;cb.dispatchEvent(new win.Event('change',{bubbles:true}));await sleep(100);
+  // toggle emotion off -> disconnect
+  sr.querySelector('[data-gtts-view] [role=checkbox][data-w="emotion"]').click();await sleep(100);
   assert.ok(!runLore.worldIds.includes('lb1')&&runLore.worldIds.includes('other'),'unlinked keeps others');
+  // game's own tab restores the pane
+  sr.querySelector('.st-sect:not([data-gtts])').click();await sleep(50);
+  assert.ok(!sr.querySelector('[data-gtts-view]'),'view removed');
+  assert.strictEqual(sr.getElementById('native').style.display,'','native restored');
+  assert.strictEqual(sr.querySelector('.head-id h2').textContent,'자료');
+  assert.ok(!doc.querySelector('dialog'),'no popup dialog');
+  assert.ok(!sr.querySelector('[data-gtts="panel"]'),'no gear button');
   const saved=JSON.parse(win.localStorage.getItem('gf-tts-v1'));assert.strictEqual(saved.worlds['run-1'].speakers['한도윤'].voice,'v1');
   console.log('ALL PASS');process.exit(0);
 })().catch(e=>{console.error(e);process.exit(1);});

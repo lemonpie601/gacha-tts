@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.1.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.2.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -55,7 +55,7 @@
       if (!remote || remote.v !== 1) return;
       data = { ...initial(), ...remote, world: data.world, global: { ...initial().global, ...remote.global }, lore: { ...initial().lore, ...remote.lore } };
       try { localStorage.setItem(STORE, JSON.stringify(data)); } catch {}
-      if (panel) render();
+      refresh();
     } catch {}
   }
 
@@ -73,7 +73,7 @@
   let ttsConfig = null, ttsConfigError = '', voices = [], voicesError = '';
   async function loadTtsConfig() {
     try { ttsConfig = await api('/api/tts/config'); ttsConfigError = ''; } catch (e) { ttsConfig = null; ttsConfigError = String(e.message || e); }
-    if (panel && tab !== 'play') render();
+    refresh();
   }
   async function loadVoices() {
     try {
@@ -82,7 +82,7 @@
       voices = raw.filter(x => x && x.id).map(x => ({ id: String(x.id), name: String(x.name || x.id) }));
       voicesError = voices.length ? '' : '보이스 목록이 비어 있습니다.';
     } catch (e) { voicesError = '보이스 목록을 불러오지 못했습니다: ' + String(e.message || e); }
-    if (panel && tab === 'settings') render();
+    refresh();
   }
 
   // ---------- 음성 생성·재생 ----------
@@ -135,7 +135,7 @@
       if (playingKey === mine) { playingKey = ''; paintButton(); }
       lastError = String(e.message || e);
       console.warn('[가챠 TTS]', lastError);
-      if (panel && tab === 'play') render();
+      refresh();
     }
   }
 
@@ -148,7 +148,7 @@
     if (!data.worlds[runId]) { data.worlds[runId] = blankWorld(name || ('게임 월드 ' + runId.slice(0, 8))); save(); }
     const w = data.worlds[runId];
     if (name && w.name !== name) { w.name = name; save(); }
-    if (data.world !== runId) { data.world = runId; save(); if (panel) render(); }
+    if (data.world !== runId) { data.world = runId; save(); refresh(); }
     autoLink(runId);
   }
   function rememberSpeaker(w, name, extra) {
@@ -193,11 +193,11 @@
         if (at >= 0) beats.splice(at, 1);
         beats.push({ runId, chapter, index, path, segments: list });
         while (beats.length > 12) beats.shift();
-        lineKey = ''; schedule(50);
+        matchedKey = ''; schedule(50);
       }
     }
     if (changed) save();
-    if (panel && tab === 'settings') render();
+    refresh();
   }
   // 대사의 영어 감정 태그는 화면에서 숨깁니다. 음성용 원문은 위에서 따로 보관합니다.
   function stripDeep(v, key, depth = 0) {
@@ -232,7 +232,7 @@
   };
 
   // ---------- 화면의 현재 대사 찾기 ----------
-  let gameHost = null, gameRoot = null, gameObserver = null, tickT = 0, lineKey = '', settleT = 0, lastLine = null;
+  let gameHost = null, gameRoot = null, gameObserver = null, tickT = 0, lineKey = '', matchedKey = '', settleT = 0, lastLine = null;
   function vnState() {
     const vn = gameRoot?.querySelector('.vn'); if (!vn) return null;
     const cap = gameRoot.querySelector('.vn-caption')?.textContent || '';
@@ -267,13 +267,14 @@
     if (s?.mute) return '';
     return s?.voice || w.fallback || '';
   }
-  function schedule(ms = 120) { if (tickT) clearTimeout(tickT); tickT = setTimeout(() => { tickT = 0; tick(); }, ms); }
+  // 타자기 효과 중에도 주기적으로 보도록 디바운스가 아니라 스로틀로 둡니다.
+  function schedule(ms = 120) { if (tickT) return; tickT = setTimeout(() => { tickT = 0; tick(); }, ms); }
   function tick(retry = 0) {
     if (!data.global.enabled) return;
     const vn = vnState(); if (!vn) return;
     const k = vn.caption + '|' + vn.line + '/' + vn.total + (vn.line ? '' : '|' + norm(vn.text).slice(0, 40));
-    if (k === lineKey && retry === 0) return;
-    if (k !== lineKey) { lineKey = k; if (data.global.interrupt) stop(); }
+    if (k === matchedKey) return;
+    if (k !== lineKey) { lineKey = k; if (data.global.interrupt && lastLine) stop(); }
     const w = current();
     const hit = w && matchLine(vn, beats, data.world);
     if (!hit) {
@@ -281,10 +282,11 @@
       if (retry < 4) { if (settleT) clearTimeout(settleT); settleT = setTimeout(() => { settleT = 0; if (lineKey === k) tick(retry + 1); }, 450); }
       return;
     }
+    matchedKey = k;
     const id = hit.beat.chapter + ':' + hit.beat.index + ':' + hit.i + ':' + hash(hit.seg.text);
     if (lastLine?.id === id) return;
     lastLine = { id, speaker: hit.seg.speaker, text: hit.seg.text, plain: hit.seg.plain, voice: voiceFor(w, hit.seg) };
-    if (panel && tab === 'play') render();
+    refresh();
     if (w.auto && lastLine.voice) play(lastLine.voice, speechText(lastLine.text), lastLine.speaker, id);
     if (data.global.prefetch) {
       const next = hit.beat.segments[hit.i + 1], nv = next && voiceFor(w, next);
@@ -293,9 +295,9 @@
   }
   function replay() {
     if (playingKey) return stop();
-    if (!lastLine) return openPanel();
+    if (!lastLine) return alert('아직 인식한 대사가 없습니다. 스토리를 진행해 주세요.');
     const w = current(); const voice = w ? voiceFor(w, lastLine) : '';
-    if (!voice) { alert((lastLine.speaker || '내레이션') + '에 지정된 보이스가 없습니다. 가챠 TTS 설정에서 지정해 주세요.'); return openPanel('settings'); }
+    if (!voice) { alert((lastLine.speaker || '내레이션') + '에 지정된 보이스가 없습니다. 가챠 포지 설정 → TTS에서 지정해 주세요.'); return; }
     play(voice, speechText(lastLine.text), lastLine.speaker, lastLine.id);
   }
 
@@ -350,14 +352,14 @@
     lore.set(runId, cleanLore(r?.lore || next));
     w.linkedOnce = true; w.loreError = ''; save();
   }
-  const linking = new Set();
+  const linking = new Set(), linkFailed = new Set();
   function autoLink(runId) {
     const w = world(runId);
-    if (!w || !w.emotion || w.linkedOnce || linking.has(runId)) return;
+    if (!w || !w.emotion || w.linkedOnce || linking.has(runId) || linkFailed.has(runId)) return;
     linking.add(runId);
     setTimeout(() => {
-      connect(runId, true).then(() => { if (panel) render(); })
-        .catch(e => { const x = world(runId); if (x) { x.loreError = String(e.message || e); save(); } })
+      connect(runId, true).then(() => { refresh(); })
+        .catch(e => { linkFailed.add(runId); const x = world(runId); if (x) { x.loreError = String(e.message || e); save(); } })
         .finally(() => linking.delete(runId));
     }, 1500);
   }
@@ -371,27 +373,23 @@
   // ---------- 상단바 버튼 ----------
   const ICON_SPEAK = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>';
   const ICON_STOP = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></svg>';
-  const ICON_GEAR = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>';
   function paintButton() {
     const b = gameRoot?.querySelector('button[data-gtts="speak"]'); if (!b) return;
     const on = !!playingKey;
     b.innerHTML = on ? ICON_STOP : ICON_SPEAK;
     b.title = on ? '음성 멈춤' : '현재 대사 다시 듣기';
     b.style.opacity = data.global.enabled && current()?.auto !== false ? '' : '.5';
+    if (view.shown) refresh();
   }
   function placeButtons() {
     if (!gameRoot || gameRoot.querySelector('button[data-gtts="speak"]')) return;
     const fs = [...gameRoot.querySelectorAll('.gf-fs-bar')].find(el => el.classList.contains('icon-button'));
     if (!fs || !fs.parentElement) return;
-    const mk = (kind, title, fn) => {
-      const b = document.createElement('button'); b.type = 'button'; b.className = 'icon-button'; b.dataset.gtts = kind;
-      b.title = title; b.setAttribute('aria-label', title);
-      b.addEventListener('pointerdown', e => e.stopPropagation());
-      b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); fn(); });
-      fs.parentElement.insertBefore(b, fs); return b;
-    };
-    mk('speak', '현재 대사 다시 듣기', replay);
-    mk('panel', '가챠 TTS 설정', () => openPanel()).innerHTML = ICON_GEAR;
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'icon-button'; b.dataset.gtts = 'speak';
+    b.setAttribute('aria-label', '현재 대사 다시 듣기');
+    b.addEventListener('pointerdown', e => e.stopPropagation());
+    b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); replay(); });
+    fs.parentElement.insertBefore(b, fs);
     paintButton();
   }
   function mount() {
@@ -400,185 +398,219 @@
       if (gameObserver) { gameObserver.disconnect(); gameObserver = null; }
       gameHost = h; gameRoot = h?.shadowRoot || null;
       if (gameRoot) {
-        gameObserver = new MutationObserver(() => { placeButtons(); schedule(); });
-        gameObserver.observe(gameRoot, { childList: true, subtree: true, characterData: true });
+        gameObserver = new MutationObserver(records => {
+          if (records.every(r => view.root.contains(r.target))) return;
+          placeButtons(); schedule(); mountSettings();
+        });
+        gameObserver.observe(gameRoot, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-screen', 'hidden'] });
       }
     }
-    placeButtons();
+    placeButtons(); mountSettings();
   }
 
-  // ---------- 패널 ----------
-  const style = document.createElement('style');
-  style.textContent = `
-#${ID}-panel{width:min(760px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:0;border:1px solid #3a3d4a;border-radius:14px;background:#17181f;color:#e8e9ef;font:14px/1.55 "Pretendard","Noto Sans KR",system-ui,sans-serif;overflow:hidden}
-#${ID}-panel::backdrop{background:#0009}
-#${ID}-panel .g-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #2c2e3a}
-#${ID}-panel .g-head h2{margin:0;font-size:16px;flex:1}
-#${ID}-panel .g-tabs{display:flex;gap:4px}
-#${ID}-panel .g-tabs button[aria-selected=true]{background:#4a55c8;border-color:#4a55c8;color:#fff}
-#${ID}-panel .g-body{padding:14px 16px;overflow:auto;max-height:calc(100dvh - 90px)}
-#${ID}-panel .g-cols{display:grid;grid-template-columns:200px minmax(0,1fr);gap:14px}
-#${ID}-panel .g-worlds{display:flex;flex-direction:column;gap:4px}
-#${ID}-panel .g-worlds button{text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#${ID}-panel .g-worlds button[aria-current=true]{border-color:#7b84f0;background:#262a4a}
-#${ID}-panel .g-card{border:1px solid #2c2e3a;border-radius:10px;padding:12px;margin-bottom:12px;background:#1d1f28}
-#${ID}-panel .g-card>b{display:block;margin-bottom:6px}
-#${ID}-panel .g-muted{color:#9a9cad;font-size:12.5px;margin:4px 0}
-#${ID}-panel .g-danger{color:#f08a8a}
-#${ID}-panel .g-ok{color:#8fd6a5}
-#${ID}-panel button,#${ID}-panel select,#${ID}-panel input,#${ID}-panel textarea{font:inherit;color:inherit;background:#252733;border:1px solid #3a3d4a;border-radius:7px;padding:5px 10px}
-#${ID}-panel button{cursor:pointer}
-#${ID}-panel button.primary{background:#4a55c8;border-color:#4a55c8;color:#fff}
-#${ID}-panel button:disabled{opacity:.5;cursor:default}
-#${ID}-panel label{display:flex;align-items:center;gap:8px;margin:6px 0}
-#${ID}-panel .g-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
-#${ID}-panel .g-spk{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) auto auto;gap:6px;align-items:center;padding:5px 0;border-top:1px solid #262833}
-#${ID}-panel .g-spk select{min-width:0;width:100%}
-#${ID}-panel .g-line{font-size:16px;line-height:1.7;padding:10px 12px;border-left:3px solid #7b84f0;background:#1d1f28;border-radius:6px}
-#${ID}-panel .g-tag{color:#b9a3ff;font-size:.85em}
-#${ID}-panel textarea{width:100%;box-sizing:border-box}
-@media (max-width:640px){#${ID}-panel .g-cols{grid-template-columns:1fr}#${ID}-panel .g-worlds{flex-direction:row;overflow-x:auto}#${ID}-panel .g-spk{grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto}#${ID}-panel .g-spk .g-mute{display:none}}
+  // ---------- 가챠 포지 설정 화면 왼쪽 목록에 'TTS' 항목 ----------
+  // 게임 자체 클래스(st-sect, st-plate, ob-control, ob-toggle, st-compress)로 그려 게임 화면처럼 보이게 합니다.
+  const CSS = `
+.gtts-view{display:flex;flex-direction:column;gap:var(--sp-2,10px);flex:1 1 auto;min-width:0;min-height:0;overflow:auto}
+.gtts-view .st-plate{display:flex;flex-direction:column;gap:var(--sp-2,10px)}
+.gtts-sub{font-size:var(--t-tiny,11px);letter-spacing:.04em;color:var(--steel-faint,#7e93ae);margin:0}
+.gtts-sub b{color:var(--text,#e8ecf6)}
+.gtts-bad{color:var(--alarm,#ff6b6b)}
+.gtts-good{color:var(--jade,#3cc9a0)}
+.gtts-two{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2,10px) var(--sp-3,16px)}
+.gtts-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1,6px)}
+.gtts-spk{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto auto;align-items:center;gap:var(--sp-1,6px) var(--sp-2,10px);padding:calc(var(--f,10px)*.35) 0;border-top:1px solid var(--steel-dark,#34435e)}
+.gtts-spk:first-child{border-top:0}
+.gtts-spk .nm{font-family:var(--display,inherit);font-weight:700;font-size:var(--t-sm,13px);color:var(--text,#e8ecf6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gtts-spk .nm small{font-weight:500;font-size:var(--t-tiny,11px);color:var(--steel-faint,#7e93ae);margin-left:.4em}
+.gtts-spk select{min-width:0;width:100%}
+.gtts-line{font-size:var(--t-sm,13px);line-height:1.6;color:var(--text,#e8ecf6);padding:calc(var(--f,10px)*.6) calc(var(--f,10px)*.8);border-left:3px solid var(--coral,#f2643c);background:color-mix(in srgb,var(--ink-2,#1a2436) 82%,transparent)}
+.gtts-line i{font-style:normal;color:var(--epic,#a77bff);font-size:.85em}
+.gtts-view input[type=range]{accent-color:var(--coral,#f2643c);width:100%}
+.gtts-view .ob-toggle .ob-bx[aria-checked="true"]{background:var(--coral,#f2643c);border-color:var(--coral,#f2643c);color:var(--on-coral,#fff)}
+.gtts-view .ob-toggle .ob-bx[aria-checked="false"] span{visibility:hidden}
+.gtts-view .st-compress[disabled]{opacity:.45;cursor:default}
+.gtts-view .st-compress.-go{background:var(--coral,#f2643c);border-color:var(--coral,#f2643c);color:var(--on-coral,#fff)}
+@media (max-width:760px){.gtts-two{grid-template-columns:1fr}.gtts-spk{grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) auto}.gtts-spk .gtts-mute{display:none}}
 `;
-  document.head.append(style);
+  const view = { root: document.createElement('div'), body: null, shown: false, tab: null, rail: null, pane: null, hidden: [], deselected: [], title: null };
+  view.root.className = 'gtts-view';
+  view.root.setAttribute('data-gtts-view', '1');
+  view.root.innerHTML = '<style>' + CSS + '</style><div class="gtts-body" style="display:contents"></div>';
+  view.body = view.root.lastChild;
+  view.root.addEventListener('click', onClick);
+  view.root.addEventListener('change', onChange);
+  view.root.addEventListener('input', e => { if (e.target.dataset.g === 'volume') { data.global.volume = Number(e.target.value); if (audio) audio.volume = data.global.volume; } });
 
-  let panel = null, tab = 'play', selWorld = '';
-  function openPanel(t) {
-    if (panel && !t) { panel.close(); panel.remove(); panel = null; return; }
-    if (t) tab = t;
-    if (!panel) {
-      panel = document.createElement('dialog'); panel.id = ID + '-panel'; panel.setAttribute('aria-label', '가챠 TTS');
-      document.body.append(panel);
-      panel.addEventListener('cancel', e => { e.preventDefault(); openPanel(); });
-      panel.addEventListener('click', onClick);
-      panel.addEventListener('change', onChange);
-      panel.showModal();
-    }
-    selWorld = data.worlds[selWorld] ? selWorld : data.world || Object.keys(data.worlds)[0] || '';
-    loadTtsConfig(); if (!voices.length) loadVoices(); syncPull();
-    render();
+  function findSettings() {
+    for (const s of gameRoot?.querySelectorAll('[data-screen="settings"]') || []) if (s.isConnected && s.getClientRects().length) return s;
+    return null;
   }
+  function makeTab() {
+    const t = document.createElement('button');
+    t.type = 'button'; t.className = 'st-sect'; t.setAttribute('role', 'tab'); t.setAttribute('aria-selected', 'false'); t.dataset.gtts = 'tab';
+    t.innerHTML = '<span class="k">음성</span><span class="n">TTS</span>';
+    t.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); if (!view.shown) showView(); });
+    return t;
+  }
+  function hideView() {
+    for (const [n, v, p] of view.hidden) if (n.isConnected) n.style.setProperty('display', v, p);
+    for (const n of view.deselected) if (n.isConnected) n.setAttribute('aria-selected', 'true');
+    if (view.title && view.title.el.isConnected) view.title.el.textContent = view.title.text;
+    view.hidden = []; view.deselected = []; view.title = null;
+    view.root.remove(); view.shown = false;
+    if (view.tab) view.tab.setAttribute('aria-selected', 'false');
+  }
+  function showView() {
+    const screen = findSettings(); if (!screen) return;
+    const pane = screen.querySelector('.st-pane'), rail = screen.querySelector('.st-rail');
+    if (!pane || !rail) return;
+    if (view.shown && view.pane !== pane) hideView();
+    if (!view.shown) {
+      for (const n of pane.children) { if (n === view.root) continue; view.hidden.push([n, n.style.getPropertyValue('display'), n.style.getPropertyPriority('display')]); n.style.setProperty('display', 'none', 'important'); }
+      pane.append(view.root); view.pane = pane; view.shown = true;
+      loadTtsConfig(); if (!voices.length) loadVoices();
+      render();
+    }
+    // 게임이 다시 그릴 때마다 자기 탭을 선택 상태로 돌리므로 우리 탭을 선택 상태로 유지합니다.
+    for (const n of rail.children) if (n !== view.tab && n.getAttribute('aria-selected') === 'true') { n.setAttribute('aria-selected', 'false'); if (!view.deselected.includes(n)) view.deselected.push(n); }
+    view.tab.setAttribute('aria-selected', 'true');
+    const h2 = screen.querySelector('.head-id h2') || gameRoot.querySelector('.head-id h2');
+    if (h2 && h2.textContent !== 'TTS') { if (!view.title || view.title.el !== h2) view.title = { el: h2, text: h2.textContent }; h2.textContent = 'TTS'; }
+  }
+  const boundRails = new WeakSet();
+  function mountSettings() {
+    const screen = findSettings();
+    if (!screen) { if (view.shown) hideView(); return; }
+    const rail = screen.querySelector('.st-rail'); if (!rail) return;
+    if (!view.tab || !rail.contains(view.tab)) { view.tab = rail.querySelector('[data-gtts="tab"]') || makeTab(); if (!rail.contains(view.tab)) rail.append(view.tab); }
+    if (!boundRails.has(rail)) {
+      boundRails.add(rail);
+      // 게임의 다른 항목을 누르면 화면을 그대로 돌려줍니다.
+      rail.addEventListener('click', e => { if (!e.target.closest?.('[data-gtts]') && view.shown) hideView(); }, true);
+    }
+    if (view.shown) showView();
+  }
+  function refresh() { if (view.shown) render(); }
+
+  const toggle = (attr, on, label, hint) => '<label class="ob-toggle"><button class="ob-bx" type="button" role="checkbox" aria-checked="' + !!on + '" ' + attr + ' aria-label="' + esc(label) + '"><span>✓</span></button><span class="bt"><b>' + esc(label) + '</b>' + (hint ? '<span class="bd">' + esc(hint) + '</span>' : '') + '</span></label>';
+  const plate = (title, kicker, inner) => '<div class="st-plate"><div class="hd"><h3>' + esc(title) + '</h3><span class="k">' + esc(kicker) + '</span></div>' + inner + '</div>';
+  const btn = (label, act, extra = '') => '<button class="st-compress" type="button" data-act="' + act + '" ' + extra + '>' + esc(label) + '</button>';
   function voiceSelect(attr, value, emptyLabel) {
     const known = voices.some(v => v.id === value);
-    return '<select ' + attr + '><option value="">' + esc(emptyLabel) + '</option>' +
+    return '<select class="ob-control" ' + attr + '><option value="">' + esc(emptyLabel) + '</option>' +
       voices.map(v => '<option value="' + esc(v.id) + '"' + (v.id === value ? ' selected' : '') + '>' + esc(v.name) + '</option>').join('') +
       (value && !known ? '<option value="' + esc(value) + '" selected>직접 입력: ' + esc(value) + '</option>' : '') +
       '<option value="__custom">보이스 ID 직접 입력…</option></select>';
   }
   function configHtml() {
-    if (ttsConfigError) return '<p class="g-danger">TTS 설정을 읽지 못했습니다: ' + esc(ttsConfigError) + '</p>';
-    if (!ttsConfig) return '<p class="g-muted">TTS 설정 확인 중…</p>';
+    if (ttsConfigError) return '<p class="gtts-sub gtts-bad">마리나라 TTS 설정을 읽지 못했습니다: ' + esc(ttsConfigError) + '</p>';
+    if (!ttsConfig) return '<p class="gtts-sub">마리나라 TTS 설정 확인 중…</p>';
     const c = ttsConfig, warn = [];
     if (c.enabled !== true) warn.push('마리나라 TTS가 꺼져 있습니다. 연결 → TTS에서 켜 주세요.');
-    if (c.source && c.source !== 'elevenlabs') warn.push('TTS 공급자가 ElevenLabs가 아닙니다 (' + esc(c.source) + ').');
-    if (c.model && !/v3|v4/i.test(c.model)) warn.push('모델 ' + esc(c.model) + '은(는) 감정 태그를 지원하지 않을 수 있습니다. eleven_v3 이상을 권장합니다.');
-    return '<p class="g-muted">마리나라 TTS: ' + (c.enabled ? '<span class="g-ok">켜짐</span>' : '<span class="g-danger">꺼짐</span>') + ' · ' + esc(c.source || '?') + ' · ' + esc(c.model || '?') + '</p>' +
-      warn.map(x => '<p class="g-danger">' + x + '</p>').join('') +
-      (c.skipBracketedText ? '<p class="g-danger">"대괄호 텍스트 건너뛰기"가 켜져 있어 감정 태그가 음성에 전달되지 않습니다.</p><div class="g-row"><button data-act="fix-brackets">대괄호 건너뛰기 끄기</button></div>' : '');
+    if (c.source && c.source !== 'elevenlabs') warn.push('TTS 공급자가 ElevenLabs가 아닙니다 (' + c.source + ').');
+    if (c.model && !/v3|v4/i.test(c.model)) warn.push('모델 ' + c.model + '은(는) 감정 태그를 지원하지 않을 수 있습니다. eleven_v3 이상을 권장합니다.');
+    if (c.skipBracketedText) warn.push('"대괄호 텍스트 건너뛰기"가 켜져 있어 감정 태그가 음성에 전달되지 않습니다.');
+    return '<p class="gtts-sub">마리나라 TTS: ' + (c.enabled ? '<b class="gtts-good">켜짐</b>' : '<b class="gtts-bad">꺼짐</b>') + ' · ' + esc(c.source || '?') + ' · ' + esc(c.model || '?') + '</p>' +
+      warn.map(x => '<p class="gtts-sub gtts-bad">' + esc(x) + '</p>').join('') +
+      (c.skipBracketedText ? '<div class="gtts-row">' + btn('대괄호 건너뛰기 끄기', 'fix-brackets') + '</div>' : '');
   }
-  function playHtml() {
-    const w = current();
+  function nowHtml(w) {
     const L = lastLine;
-    const line = L ? '<div class="g-line"><b>' + esc(L.speaker || '내레이션') + '</b><br>' + esc(L.text).replace(/\[[a-z][a-z' -]{0,30}\]/g, m => '<span class="g-tag">' + m + '</span>') + '</div>' +
-      '<p class="g-muted">보이스: ' + (L.voice ? esc(voices.find(v => v.id === L.voice)?.name || L.voice) : '<span class="g-danger">지정 안 됨</span>') + '</p>' : '<p class="g-muted">아직 인식한 대사가 없습니다. 가챠 포지에서 스토리를 열어 주세요.</p>';
-    return '<div class="g-card"><b>현재 대사</b>' + line +
-      '<div class="g-row"><button class="primary" data-act="replay"' + (L ? '' : ' disabled') + '>' + (playingKey ? '멈춤' : '다시 듣기') + '</button></div>' +
-      (lastError ? '<p class="g-danger">' + esc(lastError) + '</p>' : '') + '</div>' +
-      '<div class="g-card"><b>빠른 설정</b><p class="g-muted">현재 월드: ' + (w ? '<b>' + esc(w.name) + '</b>' : '없음') + '</p>' +
-      '<label><input type="checkbox" data-g="enabled"' + (data.global.enabled ? ' checked' : '') + '> 확장 사용</label>' +
-      (w ? '<label><input type="checkbox" data-w="auto" data-run="' + esc(data.world) + '"' + (w.auto ? ' checked' : '') + '> 이 월드에서 대사 자동 재생</label>' : '') +
-      '<label>음량 <input type="range" min="0" max="1" step="0.05" data-g="volume" value="' + esc(data.global.volume) + '" style="flex:1"></label>' + configHtml() + '</div>';
-  }
-  function worldHtml(runId) {
-    const w = world(runId);
-    if (!w) return '<p class="g-muted">아직 인식한 월드가 없습니다. 가챠 포지에서 월드를 열면 여기에 추가됩니다.</p>';
-    const r = ' data-run="' + esc(runId) + '"';
-    const speakers = Object.entries(w.speakers).sort((a, b) => (b[1].prota ? 1 : 0) - (a[1].prota ? 1 : 0) || (b[1].lines || 0) - (a[1].lines || 0));
-    const rows = speakers.map(([k, s]) => '<div class="g-spk"><span>' + esc(s.name) + (s.prota ? ' <small class="g-muted">주인공</small>' : '') + (s.lines ? ' <small class="g-muted">' + s.lines + '줄</small>' : '') + '</span>' +
-      voiceSelect('data-spk="' + esc(k) + '"' + r, s.voice || '', w.fallback ? '기본 보이스 사용' : '읽지 않음') +
-      '<button data-act="preview" data-voice="' + esc(s.voice || w.fallback || '') + '"' + (s.voice || w.fallback ? '' : ' disabled') + ' title="미리 듣기">▶</button>' +
-      '<label class="g-mute" style="margin:0"><input type="checkbox" data-mute="' + esc(k) + '"' + r + (s.mute ? ' checked' : '') + '> 끔</label></div>').join('');
-    const st = linkedState(runId);
-    return '<div class="g-card"><b>' + esc(w.name) + '</b><p class="g-muted">게임 월드 ID ' + esc(runId.slice(0, 12)) + (runId === data.world ? ' · 지금 플레이 중' : '') + '</p>' +
-      '<label><input type="checkbox" data-w="auto"' + r + (w.auto ? ' checked' : '') + '> 대사 자동 재생</label>' +
-      '<label><input type="checkbox" data-w="narrate"' + r + (w.narrate ? ' checked' : '') + '> 내레이션도 읽기</label>' +
-      (w.narrate ? '<div class="g-spk" style="grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) auto"><span>내레이터</span>' + voiceSelect('data-wv="narrator"' + r, w.narrator, '읽지 않음') + '<button data-act="preview" data-voice="' + esc(w.narrator) + '"' + (w.narrator ? '' : ' disabled') + '>▶</button></div>' : '') +
-      '<div class="g-spk" style="grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) auto"><span>기본 보이스<br><small class="g-muted">보이스를 지정하지 않은 인물</small></span>' + voiceSelect('data-wv="fallback"' + r, w.fallback, '읽지 않음') + '<button data-act="preview" data-voice="' + esc(w.fallback) + '"' + (w.fallback ? '' : ' disabled') + '>▶</button></div></div>' +
-      '<div class="g-card"><b>인물별 보이스</b><p class="g-muted">가챠 포지 장면에 나온 화자가 자동으로 추가됩니다. 보이스는 이 월드에만 적용됩니다.</p>' +
-      (rows || '<p class="g-muted">아직 인식한 화자가 없습니다.</p>') +
-      '<div class="g-row"><button data-act="add-speaker"' + r + '>화자 직접 추가</button><button data-act="reload-voices">보이스 목록 새로고침</button></div>' +
-      (voicesError ? '<p class="g-danger">' + esc(voicesError) + '</p>' : '') + '</div>' +
-      '<div class="g-card"><b>감정 태그 로어북</b><p class="g-muted">공용 로어북 하나(' + esc(LORE_NAME) + ')를 이 월드의 로어북 맨 앞에 연결해, AI가 대사에 [happy] 같은 감정 태그를 넣게 합니다. 태그는 화면에서 숨겨지고 음성에만 쓰입니다. 월드에 처음 들어올 때 한 번 자동으로 연결합니다.</p>' +
-      '<label><input type="checkbox" data-w="emotion"' + r + (w.emotion ? ' checked' : '') + '> 이 월드에 감정 태그 로어북 사용</label>' +
-      '<p class="g-muted">상태: <b>' + esc(st) + '</b>' + (w.loreError ? ' · <span class="g-danger">' + esc(w.loreError) + '</span>' : '') + '</p>' +
-      '<div class="g-row">' + (st.startsWith('연결됨') ? '<button data-act="unlink"' + r + '>연결 해제</button>' : '<button class="primary" data-act="link"' + r + '>지금 연결</button>') + '<button data-act="check-link"' + r + '>상태 확인</button></div></div>' +
-      '<div class="g-row"><button data-act="forget-world"' + r + ' class="g-danger">이 월드 설정 삭제</button></div>';
-  }
-  function commonHtml() {
-    const L = data.lore;
-    return '<div class="g-card"><b>공통</b>' +
-      '<label><input type="checkbox" data-g="enabled"' + (data.global.enabled ? ' checked' : '') + '> 확장 사용</label>' +
-      '<label><input type="checkbox" data-g="interrupt"' + (data.global.interrupt ? ' checked' : '') + '> 다음 대사로 넘기면 재생 중인 음성 멈춤</label>' +
-      '<label><input type="checkbox" data-g="prefetch"' + (data.global.prefetch ? ' checked' : '') + '> 다음 대사 음성 미리 만들기 (응답이 빨라지지만 넘긴 대사도 요금이 듭니다)</label>' +
-      '<label><input type="checkbox" data-g="stripTags"' + (data.global.stripTags ? ' checked' : '') + '> 화면에서 영어 감정 태그 숨기기</label>' +
-      '<label>음량 <input type="range" min="0" max="1" step="0.05" data-g="volume" value="' + esc(data.global.volume) + '" style="flex:1"></label>' + configHtml() + '</div>' +
-      '<div class="g-card"><b>감정 태그 로어북</b>' +
-      (L.id ? '<p class="g-muted">로어북: <b>' + esc(L.name || L.id) + '</b>' + (L.createdAt ? ' · 만든 시각 ' + esc(L.createdAt) : '') + '</p><p class="g-muted">내용은 마리나라 로어북 화면에서 자유롭게 고칠 수 있습니다. 확장이 덮어쓰지 않습니다.</p>' : '<p class="g-muted">아직 만들지 않았습니다. 월드에 처음 들어올 때 자동으로 만들어 연결합니다.</p>') +
-      (L.error ? '<p class="g-danger">' + esc(L.error) + '</p>' : '') +
-      '<div class="g-row">' + (L.id ? '' : '<button class="primary" data-act="make-lore">지금 만들기</button>') + '<button data-act="copy-guide">지침용 문구 복사</button></div>' +
-      '<p class="g-muted">로어북 대신 가챠 포지 스토리 지침에 직접 넣고 싶다면 [지침용 문구 복사]를 눌러 붙여 넣으세요. 그 경우 월드 설정에서 감정 태그 로어북 사용을 꺼 주세요.</p></div>';
+    if (!L) return '<p class="gtts-sub">아직 인식한 대사가 없습니다. 스토리를 진행하면 여기에 현재 대사가 나옵니다.</p>';
+    return '<div class="gtts-line"><b>' + esc(L.speaker || '내레이션') + '</b> ' + esc(L.text).replace(/\[[a-z][a-z' -]{0,30}\]/g, m => '<i>' + m + '</i>') + '</div>' +
+      '<div class="gtts-row">' + btn(playingKey ? '멈춤' : '다시 듣기', 'replay', 'class="st-compress -go"') +
+      '<span class="gtts-sub">보이스: ' + (L.voice ? '<b>' + esc(voices.find(v => v.id === L.voice)?.name || L.voice) + '</b>' : '<span class="gtts-bad">지정 안 됨</span>') + '</span></div>' +
+      (lastError ? '<p class="gtts-sub gtts-bad">' + esc(lastError) + '</p>' : '');
   }
   function render() {
-    if (!panel) return;
-    const keep = panel.querySelector('.g-body')?.scrollTop || 0;
-    const tabs = [['play', '재생'], ['settings', '설정'], ['common', '공통']];
-    const ids = Object.keys(data.worlds);
-    if (!data.worlds[selWorld]) selWorld = data.world || ids[0] || '';
-    let body;
-    if (tab === 'settings') {
-      body = '<div class="g-cols"><nav class="g-worlds">' + (ids.length ? ids.map(id => '<button data-act="pick-world" data-run="' + esc(id) + '" aria-current="' + (id === selWorld) + '" title="' + esc(data.worlds[id].name) + '">' + (id === data.world ? '● ' : '') + esc(data.worlds[id].name) + '</button>').join('') : '<p class="g-muted">월드 없음</p>') + '</nav><div>' + worldHtml(selWorld) + '</div></div>';
-    } else body = tab === 'common' ? commonHtml() : playHtml();
-    panel.innerHTML = '<div class="g-head"><h2>가챠 TTS</h2><div class="g-tabs">' + tabs.map(([k, l]) => '<button data-tab="' + k + '" aria-selected="' + (tab === k) + '">' + l + '</button>').join('') + '</div><button data-act="close" aria-label="닫기">✕</button></div><div class="g-body">' + body + '</div>';
-    panel.querySelector('.g-body').scrollTop = keep;
+    if (!view.shown) return;
+    const keep = view.root.scrollTop, runId = data.world, w = current(), G = data.global;
+    if (!w) {
+      view.body.innerHTML = plate('TTS', '음성', '<p class="gtts-sub">아직 월드를 확인하지 못했습니다. 월드를 열고 스토리를 한 번 진행한 뒤 다시 열어 주세요.</p>' + configHtml());
+      return;
+    }
+    const r = ' data-run="' + esc(runId) + '"';
+    const speakers = Object.entries(w.speakers).sort((a, b) => (b[1].prota ? 1 : 0) - (a[1].prota ? 1 : 0) || (b[1].lines || 0) - (a[1].lines || 0));
+    const rows = speakers.map(([k, s]) => '<div class="gtts-spk"><span class="nm" title="' + esc(s.name) + '">' + esc(s.name) + (s.prota ? '<small>주인공</small>' : s.lines ? '<small>' + s.lines + '줄</small>' : '') + '</span>' +
+      voiceSelect('data-spk="' + esc(k) + '"' + r, s.voice || '', w.fallback ? '기본 보이스 사용' : '읽지 않음') +
+      btn('▶', 'preview', 'data-voice="' + esc(s.voice || w.fallback || '') + '" title="미리 듣기"' + (s.voice || w.fallback ? '' : ' disabled')) +
+      '<button class="st-chip gtts-mute" type="button" data-mute="' + esc(k) + '"' + r + ' aria-pressed="' + !!s.mute + '">끔</button></div>').join('');
+    const st = linkedState(runId), L = data.lore;
+    view.body.innerHTML =
+      plate('현재 대사', esc(w.name), nowHtml(w)) +
+      plate('재생', '이 월드',
+        '<div class="gtts-two">' +
+        toggle('data-w="auto"' + r, w.auto, '대사 자동 재생', '대사가 화면에 나오면 바로 읽습니다') +
+        toggle('data-w="narrate"' + r, w.narrate, '내레이션도 읽기', '내레이터 보이스를 골라 주세요') + '</div>' +
+        '<div class="gtts-two">' +
+        '<div class="ob-field"><div class="ob-labelrow"><label>기본 보이스</label></div>' + voiceSelect('data-wv="fallback"' + r, w.fallback, '읽지 않음') + '<span class="gtts-sub">보이스를 지정하지 않은 인물에게 씁니다</span></div>' +
+        (w.narrate ? '<div class="ob-field"><div class="ob-labelrow"><label>내레이터</label></div>' + voiceSelect('data-wv="narrator"' + r, w.narrator, '읽지 않음') + '</div>' : '') + '</div>') +
+      plate('인물별 보이스', '이 월드',
+        '<p class="gtts-sub">장면에 나온 화자가 자동으로 추가됩니다. 보이스는 이 월드에만 적용됩니다.</p>' +
+        '<div>' + (rows || '<p class="gtts-sub">아직 인식한 화자가 없습니다.</p>') + '</div>' +
+        '<div class="gtts-row">' + btn('화자 직접 추가', 'add-speaker', r) + btn('보이스 목록 새로고침', 'reload-voices') + '</div>' +
+        (voicesError ? '<p class="gtts-sub gtts-bad">' + esc(voicesError) + '</p>' : '')) +
+      plate('감정 태그 로어북', '이 월드',
+        '<p class="gtts-sub">공용 로어북 <b>' + esc(LORE_NAME) + '</b>을(를) 이 월드의 로어북 맨 앞에 연결해 AI가 대사에 [happy] 같은 감정 태그를 넣게 합니다. 태그는 화면에서 숨겨지고 음성에만 쓰입니다. 월드에 처음 들어올 때 한 번 자동으로 연결합니다.</p>' +
+        toggle('data-w="emotion"' + r, w.emotion, '감정 태그 로어북 사용') +
+        '<p class="gtts-sub">상태: <b>' + esc(st) + '</b>' + (w.loreError ? ' · <span class="gtts-bad">' + esc(w.loreError) + '</span>' : '') + (L.id ? '' : ' · 로어북은 처음 연결할 때 만듭니다') + '</p>' +
+        '<div class="gtts-row">' + (st.startsWith('연결됨') ? btn('연결 해제', 'unlink', r) : btn('지금 연결', 'link', r + ' class="st-compress -go"')) + btn('상태 확인', 'check-link', r) + btn('지침용 문구 복사', 'copy-guide') + '</div>' +
+        '<p class="gtts-sub">로어북 내용은 마리나라 로어북 화면에서 자유롭게 고칠 수 있고, 확장이 덮어쓰지 않습니다. 스토리 지침에 직접 넣고 싶다면 문구를 복사해 붙여 넣고 위 항목을 꺼 주세요.</p>') +
+      plate('공통', '모든 월드',
+        '<div class="gtts-two">' +
+        toggle('data-g="enabled"', G.enabled, '확장 사용') +
+        toggle('data-g="interrupt"', G.interrupt, '넘기면 음성 멈춤', '다음 대사로 넘기면 재생 중인 음성을 멈춥니다') +
+        toggle('data-g="prefetch"', G.prefetch, '다음 대사 미리 만들기', '빨라지지만 건너뛴 대사도 요금이 듭니다') +
+        toggle('data-g="stripTags"', G.stripTags, '화면에서 감정 태그 숨기기') + '</div>' +
+        '<div class="ob-field"><div class="ob-labelrow"><label>음량</label></div><input type="range" min="0" max="1" step="0.05" data-g="volume" value="' + esc(G.volume) + '"></div>' +
+        configHtml());
+    view.root.scrollTop = keep;
   }
   async function busy(el, fn) {
     if (el) el.disabled = true;
-    try { await fn(); } catch (e) { alert(String(e.message || e)); } finally { if (el) el.disabled = false; render(); }
+    try { await fn(); } catch (e) { alert(String(e.message || e)); } finally { if (el) el.disabled = false; refresh(); }
   }
   function onClick(e) {
-    const t = e.target.closest('[data-tab],[data-act]'); if (!t) return;
-    if (t.dataset.tab) { tab = t.dataset.tab; return render(); }
-    const act = t.dataset.act, run = t.dataset.run, w = world(run);
-    if (act === 'close') return openPanel();
-    if (act === 'replay') { replay(); return render(); }
-    if (act === 'pick-world') { selWorld = run; return render(); }
+    const t = e.target.closest('[data-act],[role=checkbox],[data-mute]'); if (!t) return;
+    e.preventDefault();
+    const run = t.dataset.run, w = world(run);
+    if (t.getAttribute('role') === 'checkbox') {
+      const on = t.getAttribute('aria-checked') !== 'true';
+      if (t.dataset.g) { data.global[t.dataset.g] = on; save(); paintButton(); return refresh(); }
+      if (t.dataset.w && w) {
+        const k = t.dataset.w; w[k] = on; save(); paintButton();
+        if (k === 'emotion') connect(run, on).catch(err => { w.loreError = String(err.message || err); save(); }).finally(refresh);
+        return refresh();
+      }
+      return;
+    }
+    if (t.dataset.mute && w) { const s = w.speakers[t.dataset.mute]; if (s) { s.mute = !s.mute; save(); if (lastLine && current() === w) lastLine.voice = voiceFor(w, lastLine); } return refresh(); }
+    const act = t.dataset.act;
+    if (act === 'replay') { replay(); return refresh(); }
     if (act === 'preview') { const v = t.dataset.voice; if (v) play(v, SAMPLE_TEXT, '', 'preview:' + v); return; }
     if (act === 'reload-voices') return busy(t, loadVoices);
-    if (act === 'add-speaker' && w) { const n = prompt('추가할 화자 이름 (가챠 포지 대사에 표시되는 이름 그대로)'); if (n && rememberSpeaker(w, n)) { save(); render(); } return; }
+    if (act === 'add-speaker' && w) { const n = prompt('추가할 화자 이름 (가챠 포지 대사에 표시되는 이름 그대로)'); if (n && rememberSpeaker(w, n)) { save(); refresh(); } return; }
     if (act === 'link' && w) { w.emotion = true; return busy(t, () => connect(run, true)); }
     if (act === 'unlink' && w) return busy(t, () => connect(run, false));
     if (act === 'check-link') return busy(t, () => readLore(run));
-    if (act === 'make-lore') return busy(t, async () => { try { await ensureLorebook(); data.lore.error = ''; } catch (err) { data.lore.error = String(err.message || err); throw err; } finally { save(); } });
     if (act === 'copy-guide') { const txt = loreText(); navigator.clipboard?.writeText(txt).then(() => alert('복사했습니다. 가챠 포지 스토리 지침에 붙여 넣어 주세요.'), () => prompt('아래 문구를 복사해 주세요:', txt)); return; }
     if (act === 'fix-brackets') {
       if (!confirm('마리나라 TTS 설정의 "대괄호 텍스트 건너뛰기"를 끕니다. 다른 TTS 설정은 그대로 둡니다. 진행할까요?')) return;
       return busy(t, async () => { const c = await api('/api/tts/config'); await api('/api/tts/config', 'PUT', { ...c, skipBracketedText: false }); await loadTtsConfig(); });
     }
-    if (act === 'forget-world' && w) { if (!confirm(w.name + ' 월드의 보이스 설정을 삭제할까요? 게임 데이터와 로어북 연결은 그대로 둡니다.')) return; delete data.worlds[run]; if (data.world === run) data.world = ''; selWorld = ''; save(); return render(); }
   }
   function onChange(e) {
     const t = e.target, run = t.dataset.run, w = world(run);
-    if (t.dataset.g) { data.global[t.dataset.g] = t.type === 'checkbox' ? t.checked : Number(t.value); save(); paintButton(); if (audio && t.dataset.g === 'volume') audio.volume = data.global.volume; if (t.type === 'checkbox') render(); return; }
-    if (!w) return;
+    if (t.dataset.g === 'volume') { save(); return; }
+    if (!w || t.tagName !== 'SELECT') return;
     let value = t.value;
-    if (t.tagName === 'SELECT' && value === '__custom') { value = (prompt('ElevenLabs 보이스 ID를 입력해 주세요.') || '').trim(); if (!value) return render(); }
-    if (t.dataset.w) {
-      const k = t.dataset.w; w[k] = t.checked; save(); paintButton();
-      if (k === 'emotion') { const on = t.checked; connect(run, on).catch(err => { w.loreError = String(err.message || err); save(); }).finally(render); }
-      return render();
-    }
-    if (t.dataset.wv) { w[t.dataset.wv] = value; save(); return render(); }
-    if (t.dataset.spk) { const s = w.speakers[t.dataset.spk]; if (s) { s.voice = value; save(); if (lastLine && current() === w) lastLine.voice = voiceFor(w, lastLine); } return render(); }
-    if (t.dataset.mute) { const s = w.speakers[t.dataset.mute]; if (s) { s.mute = t.checked; save(); } }
+    if (value === '__custom') { value = (prompt('ElevenLabs 보이스 ID를 입력해 주세요.') || '').trim(); if (!value) return refresh(); }
+    if (t.dataset.wv) w[t.dataset.wv] = value;
+    else if (t.dataset.spk) { const s = w.speakers[t.dataset.spk]; if (s) s.voice = value; }
+    save();
+    if (lastLine && current() === w) lastLine.voice = voiceFor(w, lastLine);
+    refresh();
   }
 
   // ---------- 시작 ----------

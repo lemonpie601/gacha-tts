@@ -1,10 +1,10 @@
 {
   "kind": "marinara.personal-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "config": {
     "name": "가챠 TTS",
-    "version": "0.1.0",
-    "description": "가챠 포지 대사를 ElevenLabs 음성으로 읽기 · 월드별 보이스 설정 · 감정 태그 로어북",
+    "version": "0.2.0",
+    "description": "가챠 포지 대사를 ElevenLabs 음성으로 읽기 · 설정 화면에 월드별 TTS 항목 · 감정 태그 로어북",
     "runtime": "client",
     "enabled": false,
     "capabilities": [
