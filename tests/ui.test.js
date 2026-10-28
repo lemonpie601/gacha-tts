@@ -6,7 +6,7 @@ const win=dom.window,doc=win.document;win.Response=Response;win.Headers=Headers;
 win.HTMLDialogElement.prototype.showModal=function(){this.open=true};win.HTMLDialogElement.prototype.close=function(){this.open=false};
 const native=[];win.alert=m=>native.push(['alert',m]);win.confirm=m=>{native.push(['confirm',m]);return true;};win.prompt=m=>{native.push(['prompt',m]);return null;};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const calls=[];let runLore={worldIds:['other'],castIds:[],worldBudget:6000,castBudget:null,beat:false};
+const calls=[];let entryContent="";let runLore={worldIds:['other'],castIds:[],worldBudget:6000,castBudget:null,beat:false};
 const json=(v,ok=true)=>new win.Response(JSON.stringify(v),{status:ok?200:404,headers:{'content-type':'application/json'}});
 const played=[];
 win.URL.createObjectURL=()=>'blob:x';win.URL.revokeObjectURL=()=>{};
@@ -16,7 +16,9 @@ win.fetch=async(u,o={})=>{u=String(u);calls.push([o.method||'GET',u,o.body]);
   if(u.includes('/api/gacha-forge/state'))return json({runs:[{runId:'run-1',name:'서울 월드',lore:runLore}]});
   if(u.includes('/api/gacha-forge/run/lorebooks')){runLore=JSON.parse(o.body).lore;return json({ok:true,lore:runLore});}
   if(u.endsWith('/api/lorebooks')&&o.method==='POST')return json({id:'lb1'});
-  if(u.includes('/api/lorebooks/lb1/entries'))return json({id:'en1'});
+  if(u.endsWith('/api/lorebooks/lb1/entries/en1')){if(o.method==='PATCH'){entryContent=JSON.parse(o.body).content;return json({id:'en1'});}return json({id:'en1',content:entryContent});}
+  if(u.includes('/api/lorebooks/lb1/entries')){entryContent=JSON.parse(o.body).content;return json({id:'en1'});}
+  if(u.endsWith('/api/lorebooks/lb1'))return json({id:'lb1'});
   if(u.includes('/api/tts/config'))return json({enabled:true,source:'elevenlabs',model:'eleven_v3',skipBracketedText:true});
   if(u.includes('/api/tts/voices'))return json({voiceOptions:[{id:'v1',name:'민수'},{id:'v2',name:'지아'}]});
   if(u.includes('/api/tts/speak'))return new win.Response(new win.Blob(['abc']),{status:200});
@@ -93,6 +95,17 @@ win.eval(src);
   assert.ok(!doc.querySelector('dialog'),'no popup dialog');
   assert.ok(!sr.querySelector('[data-gtts="panel"]'),'no gear button');
   const saved=JSON.parse(win.localStorage.getItem('gf-tts-v1'));assert.strictEqual(saved.worlds['run-1'].speakers['한도윤'].voice,'v1');
+  // every tag the guide teaches is hidden on screen
+  const guide=T.loreText();const tags=guide.match(/\[[^\]\n]+\]/g).filter(x=>/^\[[a-z]/.test(x));
+  assert.ok(tags.length>80,'detailed tag list: '+tags.length);
+  for(const tag of tags)assert.strictEqual(T.stripTags(tag+' 가'),'가','strip '+tag);
+  assert.ok(guide.includes('다음 태그가 나올 때까지')&&guide.includes('되돌리'),'explains carry-over and reset');
+  // unedited v1 guide is upgraded; an edited one is left alone
+  T.data.lore.textVer=1;entryContent=T.LORE_TEXT_V1;
+  assert.strictEqual(await T.upgradeLoreText(),true);assert.strictEqual(entryContent,guide,'v1 upgraded');
+  T.data.lore.textVer=1;entryContent='내가 고친 지침';
+  assert.strictEqual(await T.upgradeLoreText(),false);assert.strictEqual(entryContent,'내가 고친 지침','edited kept');assert.ok(T.data.lore.edited);
+  assert.strictEqual(await T.upgradeLoreText(true),true);assert.strictEqual(entryContent,guide,'forced reset');assert.ok(!T.data.lore.edited);
   assert.deepStrictEqual(native,[],'no native alert/confirm/prompt');
   console.log('ALL PASS');process.exit(0);
 })().catch(e=>{console.error(e);process.exit(1);});

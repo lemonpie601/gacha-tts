@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.3.1 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.4.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -308,25 +308,82 @@
     const num = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
     return { worldIds: ids(l?.worldIds), castIds: ids(l?.castIds), worldBudget: num(l?.worldBudget), castBudget: num(l?.castBudget), beat: l?.beat === true || l?.beat === 'true' };
   }
+  // v0.1~0.3이 만든 지침. 사용자가 고치지 않았으면 새 지침으로 바꿔 줍니다.
+  const LORE_TEXT_V1 = [
+    '[음성 감정 태그 · 가챠 TTS]',
+    '인물이 소리 내어 말하는 대사(text)에는 ElevenLabs 음성 연출 태그를 영어 소문자 대괄호로 넣으세요.',
+    '예: [happy] [sad] [angry] [excited] [nervous] [curious] [sarcastic] [whispers] [shouts] [laughs] [chuckles] [sighs] [crying] [gasps] [short pause] [long pause]',
+    '- 대사 맨 앞에 하나를 두고, 감정이 바뀌는 곳에만 하나 더 넣습니다. 한 대사에 최대 세 개까지.',
+    '- 태그는 영어 그대로 쓰고 번역하지 마세요. 내레이션, 화자 이름(speaker), 장소, 선택지에는 넣지 마세요.',
+    '- 태그는 화면에서 자동으로 숨겨지고 음성에만 쓰입니다. 대사 내용은 평소와 똑같이 쓰세요.',
+  ].join('\n');
+  const LORE_VER = 2;
   function loreText() {
     return [
       '[음성 감정 태그 · 가챠 TTS]',
-      '인물이 소리 내어 말하는 대사(text)에는 ElevenLabs 음성 연출 태그를 영어 소문자 대괄호로 넣으세요.',
-      '예: [happy] [sad] [angry] [excited] [nervous] [curious] [sarcastic] [whispers] [shouts] [laughs] [chuckles] [sighs] [crying] [gasps] [short pause] [long pause]',
-      '- 대사 맨 앞에 하나를 두고, 감정이 바뀌는 곳에만 하나 더 넣습니다. 한 대사에 최대 세 개까지.',
-      '- 태그는 영어 그대로 쓰고 번역하지 마세요. 내레이션, 화자 이름(speaker), 장소, 선택지에는 넣지 마세요.',
-      '- 태그는 화면에서 자동으로 숨겨지고 음성에만 쓰입니다. 대사 내용은 평소와 똑같이 쓰세요.',
+      '인물이 소리 내어 말하는 대사(text)에 ElevenLabs 음성 연출 태그를 영어 소문자 대괄호로 넣으세요. 태그는 화면에서 숨겨지고 음성에만 쓰입니다.',
+      '',
+      '■ 태그가 적용되는 범위 (가장 중요)',
+      '- 태그는 바로 뒤의 말투를 다음 태그가 나올 때까지 계속 바꿉니다. 끝을 표시하지 않으면 대사 끝까지 이어집니다.',
+      '- 그래서 강한 태그([shouts] [yelling] [screams] [whispers] [crying] [sobbing] [furious] [panicked])는 그 구절에만 쓰고, 구절이 끝나면 바로 다음 문장 앞에 본래 감정 태그를 다시 붙여 되돌리세요.',
+      '  예) [shouts] 멈춰! [tense] …지금 움직이면 다 무너져. [softly] 괜찮아, 천천히.',
+      '- 고함·속삭임·울음은 대사 전체가 아니라 실제로 그렇게 말하는 짧은 구절에만 씁니다.',
+      '',
+      '■ 쓰는 위치와 개수',
+      '- 대사 첫머리에 반드시 하나. 이후 문장이나 구절에서 감정·강도·말투가 바뀔 때마다 하나씩 더 붙입니다. 개수 제한은 없지만, 한 문장 앞에 감정 태그는 하나만 둡니다.',
+      '- 웃음·한숨 같은 소리 태그는 감정 태그와 별개로, 그 소리가 나는 자리에 넣습니다. 예) [annoyed] 또야? [sighs] [tired] 알았어, 내가 할게.',
+      '- 같은 감정이라도 강도를 나눠 쓰세요: 짜증 [irritated] → 화남 [angry] → 격분 [furious], 불안 [uneasy] → 두려움 [scared] → 공포 [terrified].',
+      '',
+      '■ 감정 (기분과 결)',
+      '기쁨: [happy] [cheerful] [delighted] [excited] [elated] [content] [relieved] [proud] [amused]',
+      '애정·장난: [warm] [affectionate] [tender] [gentle] [playful] [teasing] [mischievously] [flirty] [smug]',
+      '수줍음·당황: [shy] [embarrassed] [flustered] [awkward] [sheepish]',
+      '불안·두려움: [uneasy] [nervous] [anxious] [worried] [scared] [terrified] [panicked]',
+      '슬픔: [sad] [melancholic] [wistful] [lonely] [hurt] [heartbroken] [regretful] [resigned]',
+      '분노·불쾌: [annoyed] [irritated] [frustrated] [angry] [furious] [bitter] [resentful] [disgusted]',
+      '냉담·비꼼: [cold] [indifferent] [dismissive] [contemptuous] [sarcastic] [deadpan]',
+      '진지·의지: [serious] [tense] [firm] [determined] [confident] [commanding] [solemn]',
+      '놀람·궁금: [surprised] [shocked] [startled] [confused] [curious] [suspicious] [thoughtful] [skeptical]',
+      '지침: [tired] [exhausted] [sleepy] [bored] [weak] [in pain]',
+      '',
+      '■ 말투 (다음 태그까지 이어짐 — 끝나면 되돌리기)',
+      '[softly] [quietly] [whispers] [murmurs] [mutters] [calmly] [slowly] [rushed] [hesitant] [stammering] [breathless] [trembling] [pleading] [through gritted teeth] [loudly] [shouts] [yelling] [screams] [sing-song]',
+      '',
+      '■ 소리 (그 자리에서 한 번)',
+      '[laughs] [chuckles] [giggles] [snickers] [scoffs] [snorts] [sighs] [exhales] [inhales deeply] [gasps] [gulps] [sniffles] [sobs] [groans] [hums] [clears throat] [tsk]',
+      '',
+      '■ 쉼',
+      '[short pause] [pause] [long pause] — 말을 고르거나 머뭇거리는 곳에. 말줄임표(…)와 함께 써도 됩니다.',
+      '',
+      '■ 지킬 것',
+      '- 태그는 위의 영어 그대로 쓰고 번역하지 마세요. 목록에 없는 영어 태그도 쓸 수 있지만 영어 소문자로만 씁니다.',
+      '- 내레이션, 화자 이름(speaker), 장소, 선택지에는 넣지 마세요.',
+      '- 대사 내용은 평소와 똑같이 쓰고, 태그 때문에 문장을 늘리거나 바꾸지 마세요.',
     ].join('\n');
+  }
+  // 확장이 만든 그대로인 지침만 새 버전으로 바꿉니다. 사용자가 고친 내용은 덮어쓰지 않습니다.
+  async function upgradeLoreText(force) {
+    const L = data.lore;
+    if (!L.id || !L.entryId || (!force && L.textVer >= LORE_VER)) return false;
+    const path = '/api/lorebooks/' + encodeURIComponent(L.id) + '/entries/' + encodeURIComponent(L.entryId);
+    const entry = await api(path);
+    const content = String(entry?.content ?? entry?.entry?.content ?? '').trim();
+    const untouched = content === LORE_TEXT_V1 || (L.textHash && hash(content) === L.textHash) || content === loreText();
+    if (!force && !untouched) { L.textVer = LORE_VER; L.edited = true; save(); return false; }
+    await api(path, 'PATCH', { content: loreText() });
+    Object.assign(L, { textVer: LORE_VER, textHash: hash(loreText()), edited: false, updatedAt: now() });
+    save();
+    return true;
   }
   async function ensureLorebook() {
     const L = data.lore;
     if (L.id) {
-      try { await api('/api/lorebooks/' + encodeURIComponent(L.id)); return L.id; }
+      try { await api('/api/lorebooks/' + encodeURIComponent(L.id)); upgradeLoreText().catch(() => {}); return L.id; }
       catch (e) { if (e.status !== 404) throw e; L.id = ''; L.entryId = ''; }
     }
     const book = await api('/api/lorebooks', 'POST', { name: LORE_NAME, description: '가챠 TTS 확장이 만든 로어북입니다. 대사에 음성 감정 태그를 넣도록 안내합니다. 내용은 자유롭게 고쳐도 됩니다.', enabled: true, isGlobal: false, tags: [LORE_TAG] });
     const entry = await api('/api/lorebooks/' + encodeURIComponent(book.id) + '/entries', 'POST', { name: '음성 감정 태그', content: loreText(), constant: true, enabled: true, order: 1, keys: [], position: 0, description: '가챠 TTS' });
-    Object.assign(L, { id: book.id, name: LORE_NAME, entryId: entry?.id || '', error: '', createdAt: now() });
+    Object.assign(L, { id: book.id, name: LORE_NAME, entryId: entry?.id || '', error: '', createdAt: now(), textVer: LORE_VER, textHash: hash(loreText()), edited: false });
     // 월드마다 다시 한 번 자동 연결할 수 있게 합니다.
     for (const w of Object.values(data.worlds)) w.linkedOnce = false;
     save();
@@ -557,7 +614,8 @@
         '<p class="gtts-sub">공용 로어북 <b>' + esc(LORE_NAME) + '</b>을(를) 이 월드의 로어북 맨 앞에 연결해 AI가 대사에 [happy] 같은 감정 태그를 넣게 합니다. 태그는 화면에서 숨겨지고 음성에만 쓰입니다. 월드에 처음 들어올 때 한 번 자동으로 연결합니다.</p>' +
         toggle('data-w="emotion"' + r, w.emotion, '감정 태그 로어북 사용') +
         '<p class="gtts-sub">상태: <b>' + esc(st) + '</b>' + (w.loreError ? ' · <span class="gtts-bad">' + esc(w.loreError) + '</span>' : '') + (L.id ? '' : ' · 로어북은 처음 연결할 때 만듭니다') + '</p>' +
-        '<div class="gtts-row">' + (st.startsWith('연결됨') ? btn('연결 해제', 'unlink', r) : btn('지금 연결', 'link', r + ' class="st-compress -go"')) + btn('상태 확인', 'check-link', r) + btn('지침용 문구 복사', 'copy-guide') + '</div>' +
+        '<div class="gtts-row">' + (st.startsWith('연결됨') ? btn('연결 해제', 'unlink', r) : btn('지금 연결', 'link', r + ' class="st-compress -go"')) + btn('상태 확인', 'check-link', r) + btn('지침용 문구 복사', 'copy-guide') + (L.id && L.entryId ? btn('기본 지침으로 바꾸기', 'reset-lore') : '') + '</div>' +
+        (L.edited ? '<p class="gtts-sub">로어북 지침을 직접 고치셔서 새 기본 지침(v' + LORE_VER + ')으로 자동으로 바꾸지 않았습니다. 바꾸려면 [기본 지침으로 바꾸기]를 눌러 주세요.</p>' : (L.updatedAt ? '<p class="gtts-sub">지침을 최신 버전으로 바꿨습니다 · ' + esc(L.updatedAt) + '</p>' : '')) +
         '<p class="gtts-sub">로어북 내용은 마리나라 로어북 화면에서 자유롭게 고칠 수 있고, 확장이 덮어쓰지 않습니다. 스토리 지침에 직접 넣고 싶다면 문구를 복사해 붙여 넣고 위 항목을 꺼 주세요.</p>') +
       plate('공통', '모든 월드',
         '<div class="gtts-two">' +
@@ -659,6 +717,12 @@
     if (act === 'link' && w) { w.emotion = true; return busy(t, () => connect(run, true)); }
     if (act === 'unlink' && w) return busy(t, () => connect(run, false));
     if (act === 'check-link') return busy(t, () => readLore(run));
+    if (act === 'reset-lore') {
+      ask('기본 지침으로 바꾸기', '로어북 「' + LORE_NAME + '」의 지침을 확장의 최신 기본 지침으로 덮어씁니다. 직접 고친 내용은 사라집니다.', { ok: '바꾸기' }).then(ok => {
+        if (ok) busy(t, async () => { await upgradeLoreText(true); notify('지침을 최신 기본 지침으로 바꿨습니다. 다음 장면부터 반영됩니다.'); });
+      });
+      return;
+    }
     if (act === 'copy-guide') {
       const txt = loreText(), show = () => ask('지침용 문구', '아래 문구를 복사해 스토리 지침에 붙여 넣어 주세요.', { input: true, multiline: true, value: txt, cancel: false, ok: '닫기' });
       (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => notify('복사했습니다. 가챠 포지 스토리 지침에 붙여 넣어 주세요.'), show);
@@ -690,9 +754,11 @@
 
   // ---------- 시작 ----------
   syncPull();
+  // 예전 버전이 만든 지침을 새 지침으로 바꿉니다 (직접 고친 경우 제외).
+  setTimeout(() => upgradeLoreText().catch(() => {}), 4000);
   mount();
   new MutationObserver(() => { if (!gameRoot || !gameHost?.isConnected) mount(); }).observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncPull(); else stop(); });
 
-  globalThis.__gfTts = { matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
+  globalThis.__gfTts = { upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
 })();
