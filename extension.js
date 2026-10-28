@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.2.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.3.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -370,26 +370,28 @@
     return l.worldIds.includes(data.lore.id) ? (l.beat ? '연결됨' : '연결됨 · 스토리 장면 사용 꺼짐') : '연결 안 됨';
   }
 
-  // ---------- 상단바 버튼 ----------
-  const ICON_SPEAK = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>';
-  const ICON_STOP = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></svg>';
+  // ---------- 스토리 도구 막대(자동·넘기기·기록)의 '듣기' 버튼 ----------
+  const ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>';
+  const ICON_STOP = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></svg>';
   function paintButton() {
-    const b = gameRoot?.querySelector('button[data-gtts="speak"]'); if (!b) return;
-    const on = !!playingKey;
-    b.innerHTML = on ? ICON_STOP : ICON_SPEAK;
-    b.title = on ? '음성 멈춤' : '현재 대사 다시 듣기';
-    b.style.opacity = data.global.enabled && current()?.auto !== false ? '' : '.5';
+    const b = gameRoot?.querySelector('button[data-gtts="speak"]');
+    if (b) {
+      const on = !!playingKey, label = on ? '멈춤' : '듣기';
+      // 같은 상태면 다시 쓰지 않아 게임 화면 관찰이 반복되지 않게 합니다.
+      if (b.dataset.state !== label) { b.dataset.state = label; b.innerHTML = (on ? ICON_STOP : ICON_SPEAK) + label; }
+      b.toggleAttribute('data-on', on);
+      b.title = on ? '음성 멈춤' : '현재 대사 듣기' + (data.global.enabled && current()?.auto ? ' (자동 재생 켜짐)' : '');
+    }
     if (view.shown) refresh();
   }
   function placeButtons() {
-    if (!gameRoot || gameRoot.querySelector('button[data-gtts="speak"]')) return;
-    const fs = [...gameRoot.querySelectorAll('.gf-fs-bar')].find(el => el.classList.contains('icon-button'));
-    if (!fs || !fs.parentElement) return;
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'icon-button'; b.dataset.gtts = 'speak';
-    b.setAttribute('aria-label', '현재 대사 다시 듣기');
+    const tools = gameRoot?.querySelector('.vn-tools');
+    if (!tools || tools.querySelector('button[data-gtts="speak"]')) return;
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'vn-tool'; b.dataset.gtts = 'speak';
+    b.setAttribute('aria-label', '현재 대사 듣기');
     b.addEventListener('pointerdown', e => e.stopPropagation());
     b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); replay(); });
-    fs.parentElement.insertBefore(b, fs);
+    tools.prepend(b);
     paintButton();
   }
   function mount() {

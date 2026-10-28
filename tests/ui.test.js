@@ -22,10 +22,11 @@ win.fetch=async(u,o={})=>{u=String(u);calls.push([o.method||'GET',u,o.body]);
   if(u.includes('/api/tts/speak'))return new win.Response(new win.Blob(['abc']),{status:200});
   return json({},false);};
 const host=doc.createElement('marinara-capability-gacha-forge');doc.body.append(host);
-const sr=host.attachShadow({mode:'open'});sr.innerHTML='<div class="bar"><button class="gf-fs-bar icon-button">⛶</button></div><div class="vn"><span class="vn-caption">3챕터 · 공방</span><p class="vn-line">…</p><span class="vn-count">01 / 3</span></div>';
+const sr=host.attachShadow({mode:'open'});sr.innerHTML='<div class="bar"><button class="gf-fs-bar icon-button">⛶</button></div><div class="vn"><span class="vn-caption">3챕터 · 공방</span><div class="vn-tools"><button class="vn-tool" data-auto>Auto</button><button class="vn-tool" data-skip>Skip</button></div><p class="vn-line">…</p><span class="vn-count">01 / 3</span></div>';
 win.eval(src);
 (async()=>{
-  assert.ok(sr.querySelector('[data-gtts="speak"]'),'speak button');
+  const sb=sr.querySelector('.vn-tools [data-gtts="speak"]');assert.ok(sb&&sb.classList.contains('vn-tool'),'listen button in story toolbar');
+  assert.strictEqual(sr.querySelector('.vn-tools').firstElementChild,sb,'listen button left of Auto');assert.ok(sb.textContent.includes('듣기'));
   const r=await win.fetch('/api/gacha-forge/beat',{method:'POST',body:JSON.stringify({runId:'run-1',chapter:3,storyIndex:0})});
   const j=await r.json();
   assert.strictEqual(j.segments[1].text,'가자! 조용히.','tags stripped for display');
@@ -44,6 +45,11 @@ win.eval(src);
   assert.strictEqual(speak.length,1,'one speak call');
   assert.deepStrictEqual(JSON.parse(speak[0][2]),{text:'[excited] 가자! [whispers] 조용히.',voice:'v1',speaker:'한도윤'});
   assert.strictEqual(played.length,1);
+  // listen button replays the current line (cached clip, no new speak call)
+  const lb=()=>sr.querySelector('[data-gtts="speak"]');assert.ok(lb().hasAttribute('data-on')&&lb().textContent.includes('멈춤'),'shows stop while playing');
+  lb().click();await sleep(20);assert.ok(!lb().hasAttribute('data-on')&&lb().textContent.includes('듣기'),'stopped');
+  lb().click();await sleep(50);
+  assert.strictEqual(played.length,2,'replayed');assert.strictEqual(calls.filter(c=>c[1].includes('/api/tts/speak')).length,1,'cached');
   // narration not read by default
   sr.querySelector('.vn-line').textContent='바람이 분다.';sr.querySelector('.vn-count').textContent='01 / 3';await sleep(400);
   assert.strictEqual(calls.filter(c=>c[1].includes('/api/tts/speak')).length,1,'narration skipped');
