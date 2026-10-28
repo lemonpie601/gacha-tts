@@ -4,7 +4,7 @@ const src=fs.readFileSync(process.argv[2]||require('path').join(__dirname,'..','
 const dom=new JSDOM('<!doctype html><body></body>',{url:'https://local.test/',runScripts:'outside-only'});
 const win=dom.window,doc=win.document;win.Response=Response;win.Headers=Headers;win.Blob=Blob;
 win.HTMLDialogElement.prototype.showModal=function(){this.open=true};win.HTMLDialogElement.prototype.close=function(){this.open=false};
-win.alert=m=>console.log('ALERT',m);win.confirm=()=>true;win.prompt=()=>null;
+const native=[];win.alert=m=>native.push(['alert',m]);win.confirm=m=>{native.push(['confirm',m]);return true;};win.prompt=m=>{native.push(['prompt',m]);return null;};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const calls=[];let runLore={worldIds:['other'],castIds:[],worldBudget:6000,castBudget:null,beat:false};
 const json=(v,ok=true)=>new win.Response(JSON.stringify(v),{status:ok?200:404,headers:{'content-type':'application/json'}});
@@ -71,6 +71,20 @@ win.eval(src);
   // toggle emotion off -> disconnect
   sr.querySelector('[data-gtts-view] [role=checkbox][data-w="emotion"]').click();await sleep(100);
   assert.ok(!runLore.worldIds.includes('lb1')&&runLore.worldIds.includes('other'),'unlinked keeps others');
+  // in-game modal instead of window.prompt/confirm (keeps fullscreen)
+  viewEl.querySelector('[data-act="add-speaker"]').click();await sleep(20);
+  let veil=sr.querySelector('.gtts-veil');assert.ok(veil,'modal drawn inside the game shadow root');
+  veil.querySelector('input').value='공방장';veil.querySelector('[data-a="ok"]').click();await sleep(20);
+  assert.ok(!sr.querySelector('.gtts-veil'),'modal closed');assert.ok(T.data.worlds['run-1'].speakers['공방장'],'speaker added via modal');
+  sr.querySelector('[data-gtts-view] [data-act="fix-brackets"]').click();await sleep(20);
+  veil=sr.querySelector('.gtts-veil');assert.ok(veil.textContent.includes('대괄호'));
+  veil.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await sleep(20);
+  assert.ok(!sr.querySelector('.gtts-veil'),'escape cancels');
+  assert.ok(!calls.some(c=>c[0]==='PUT'),'cancel sends nothing');
+  const vsel=sr.querySelector('[data-gtts-view] select[data-wv="fallback"]');vsel.value='__custom';vsel.dispatchEvent(new win.Event('change',{bubbles:true}));await sleep(20);
+  veil=sr.querySelector('.gtts-veil');veil.querySelector('input').value='custom-id';
+  veil.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await sleep(20);
+  assert.strictEqual(T.data.worlds['run-1'].fallback,'custom-id','voice id via modal');
   // game's own tab restores the pane
   sr.querySelector('.st-sect:not([data-gtts])').click();await sleep(50);
   assert.ok(!sr.querySelector('[data-gtts-view]'),'view removed');
@@ -79,5 +93,6 @@ win.eval(src);
   assert.ok(!doc.querySelector('dialog'),'no popup dialog');
   assert.ok(!sr.querySelector('[data-gtts="panel"]'),'no gear button');
   const saved=JSON.parse(win.localStorage.getItem('gf-tts-v1'));assert.strictEqual(saved.worlds['run-1'].speakers['한도윤'].voice,'v1');
+  assert.deepStrictEqual(native,[],'no native alert/confirm/prompt');
   console.log('ALL PASS');process.exit(0);
 })().catch(e=>{console.error(e);process.exit(1);});

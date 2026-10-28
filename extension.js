@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.3.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.3.1 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -295,9 +295,9 @@
   }
   function replay() {
     if (playingKey) return stop();
-    if (!lastLine) return alert('아직 인식한 대사가 없습니다. 스토리를 진행해 주세요.');
+    if (!lastLine) return notify('아직 인식한 대사가 없습니다. 스토리를 진행해 주세요.');
     const w = current(); const voice = w ? voiceFor(w, lastLine) : '';
-    if (!voice) { alert((lastLine.speaker || '내레이션') + '에 지정된 보이스가 없습니다. 가챠 포지 설정 → TTS에서 지정해 주세요.'); return; }
+    if (!voice) return notify((lastLine.speaker || '내레이션') + '에 지정된 보이스가 없습니다. 설정 → TTS에서 지정해 주세요.', 'bad');
     play(voice, speechText(lastLine.text), lastLine.speaker, lastLine.id);
   }
 
@@ -569,9 +569,72 @@
         configHtml());
     view.root.scrollTop = keep;
   }
+  // ---------- 자체 알림·확인 창 ----------
+  // 브라우저 기본 alert/confirm/prompt는 전체 화면을 풀어 버리므로, 게임 화면(전체 화면 요소) 안에 직접 그립니다.
+  const UI_CSS = `
+.gtts-veil{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;background:rgba(6,10,18,.55);font-family:var(--body,inherit)}
+.gtts-modal{width:min(440px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;display:flex;flex-direction:column;gap:var(--sp-2,10px);padding:var(--sp-3,16px);
+  background:var(--ink-2,#1a2436);border:1px solid var(--steel-dark,#34435e);border-top:3px solid var(--coral,#f2643c);color:var(--text,#e8ecf6);
+  --cut:.6em;clip-path:var(--clip-card,none);border-radius:var(--radius,6px);box-shadow:0 18px 50px #000a;animation:gtts-in .16s ease-out}
+.gtts-modal h3{margin:0;font-family:var(--display,inherit);font-stretch:var(--stretch,normal);font-weight:700;font-size:var(--t-md,15px);letter-spacing:.06em}
+.gtts-modal p{margin:0;font-size:var(--t-sm,13px);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.gtts-modal input,.gtts-modal textarea{width:100%;box-sizing:border-box;font:inherit;font-size:var(--t-sm,13px);color:var(--text,#e8ecf6);background:var(--ink-3,#1e2a40);border:1px solid var(--steel-dark,#34435e);padding:calc(var(--f,10px)*.5) calc(var(--f,10px)*.7);border-radius:var(--radius-sm,3px)}
+.gtts-modal input:focus,.gtts-modal textarea:focus{outline:none;border-color:var(--coral,#f2643c)}
+.gtts-modal .gtts-acts{display:flex;justify-content:flex-end;gap:var(--sp-1,6px)}
+.gtts-modal button{cursor:pointer;font-family:var(--display,inherit);font-weight:700;font-size:var(--t-xs,12px);letter-spacing:.1em;padding:calc(var(--f,10px)*.5) calc(var(--f,10px)*1.2);
+  background:transparent;border:1px solid var(--steel-dark,#34435e);color:var(--text,#e8ecf6);border-radius:var(--radius-sm,3px)}
+.gtts-modal button:hover{border-color:var(--coral,#f2643c)}
+.gtts-modal button.-go{background:var(--coral,#f2643c);border-color:var(--coral,#f2643c);color:var(--on-coral,#fff)}
+.gtts-toast{position:fixed;left:50%;bottom:calc(var(--sp-3,16px)*2);transform:translateX(-50%);z-index:2147483001;max-width:min(520px,calc(100vw - 32px));
+  padding:calc(var(--f,10px)*.7) calc(var(--f,10px)*1.2);background:var(--ink-2,#1a2436);border:1px solid var(--steel-dark,#34435e);border-left:3px solid var(--coral,#f2643c);
+  color:var(--text,#e8ecf6);font-size:var(--t-sm,13px);line-height:1.5;border-radius:var(--radius-sm,3px);box-shadow:0 10px 30px #0009;animation:gtts-in .16s ease-out;pointer-events:none}
+.gtts-toast[data-tone=bad]{border-left-color:var(--alarm,#ff6b6b)}
+@keyframes gtts-in{from{opacity:0;transform:translateY(6px)}}
+.gtts-toast{animation-name:gtts-toast-in}@keyframes gtts-toast-in{from{opacity:0;transform:translate(-50%,6px)}}
+`;
+  function uiLayer() {
+    // 전체 화면 중인 요소(보통 가챠 포지) 안에 있어야 보입니다.
+    const fsEl = document.fullscreenElement;
+    const root = gameRoot && (!fsEl || fsEl === gameHost || fsEl.contains(gameHost)) ? gameRoot : fsEl || document.body;
+    if (![...root.children].some(n => n.dataset?.gttsUi)) { const st = document.createElement('style'); st.dataset.gttsUi = '1'; st.textContent = UI_CSS; root.append(st); }
+    return root;
+  }
+  let toastT = 0;
+  function notify(msg, tone = '') {
+    const root = uiLayer();
+    for (const n of [...root.children]) if (n.classList?.contains('gtts-toast')) n.remove();
+    const t = document.createElement('div'); t.className = 'gtts-toast'; t.setAttribute('role', 'status'); if (tone) t.dataset.tone = tone;
+    t.textContent = msg; root.append(t);
+    clearTimeout(toastT); toastT = setTimeout(() => t.remove(), 3200);
+  }
+  // ask(제목, 내용, {input, value, multiline, ok, cancel}) → 확인: 입력값 또는 true, 취소: null
+  function ask(title, msg, o = {}) {
+    return new Promise(resolve => {
+      const root = uiLayer();
+      const veil = document.createElement('div'); veil.className = 'gtts-veil';
+      const field = o.input ? (o.multiline ? '<textarea rows="8" readonly></textarea>' : '<input type="text" autocomplete="off" spellcheck="false">') : '';
+      veil.innerHTML = '<div class="gtts-modal" role="dialog" aria-modal="true"><h3></h3>' + (msg ? '<p></p>' : '') + field +
+        '<div class="gtts-acts">' + (o.cancel === false ? '' : '<button type="button" data-a="no">' + esc(o.cancel || '취소') + '</button>') + '<button type="button" class="-go" data-a="ok">' + esc(o.ok || '확인') + '</button></div></div>';
+      veil.querySelector('h3').textContent = title;
+      if (msg) veil.querySelector('p').textContent = msg;
+      const inp = veil.querySelector('input,textarea');
+      if (inp) inp.value = o.value || '';
+      const done = ok => { veil.remove(); resolve(ok ? (inp && !o.multiline ? inp.value : true) : null); };
+      // 게임이 클릭·키 입력으로 대사를 넘기지 않도록 여기서 멈춥니다.
+      for (const type of ['pointerdown', 'mousedown', 'click', 'wheel', 'touchstart']) veil.addEventListener(type, e => e.stopPropagation());
+      veil.addEventListener('keydown', e => {
+        e.stopPropagation();
+        if (e.key === 'Escape') { e.preventDefault(); done(false); }
+        else if (e.key === 'Enter' && !(inp && o.multiline)) { e.preventDefault(); done(true); }
+      });
+      veil.addEventListener('click', e => { const a = e.target.closest('[data-a]')?.dataset.a; if (a) done(a === 'ok'); else if (e.target === veil) done(false); });
+      root.append(veil);
+      setTimeout(() => { if (inp) { inp.focus(); inp.select(); } else veil.querySelector('.-go').focus(); }, 0);
+    });
+  }
   async function busy(el, fn) {
     if (el) el.disabled = true;
-    try { await fn(); } catch (e) { alert(String(e.message || e)); } finally { if (el) el.disabled = false; refresh(); }
+    try { await fn(); } catch (e) { notify(String(e.message || e), 'bad'); } finally { if (el) el.disabled = false; refresh(); }
   }
   function onClick(e) {
     const t = e.target.closest('[data-act],[role=checkbox],[data-mute]'); if (!t) return;
@@ -592,22 +655,32 @@
     if (act === 'replay') { replay(); return refresh(); }
     if (act === 'preview') { const v = t.dataset.voice; if (v) play(v, SAMPLE_TEXT, '', 'preview:' + v); return; }
     if (act === 'reload-voices') return busy(t, loadVoices);
-    if (act === 'add-speaker' && w) { const n = prompt('추가할 화자 이름 (가챠 포지 대사에 표시되는 이름 그대로)'); if (n && rememberSpeaker(w, n)) { save(); refresh(); } return; }
+    if (act === 'add-speaker' && w) { ask('화자 추가', '가챠 포지 대사에 표시되는 이름 그대로 적어 주세요.', { input: true, ok: '추가' }).then(n => { if (n && n.trim() && rememberSpeaker(w, n)) { save(); refresh(); } }); return; }
     if (act === 'link' && w) { w.emotion = true; return busy(t, () => connect(run, true)); }
     if (act === 'unlink' && w) return busy(t, () => connect(run, false));
     if (act === 'check-link') return busy(t, () => readLore(run));
-    if (act === 'copy-guide') { const txt = loreText(); navigator.clipboard?.writeText(txt).then(() => alert('복사했습니다. 가챠 포지 스토리 지침에 붙여 넣어 주세요.'), () => prompt('아래 문구를 복사해 주세요:', txt)); return; }
+    if (act === 'copy-guide') {
+      const txt = loreText(), show = () => ask('지침용 문구', '아래 문구를 복사해 스토리 지침에 붙여 넣어 주세요.', { input: true, multiline: true, value: txt, cancel: false, ok: '닫기' });
+      (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => notify('복사했습니다. 가챠 포지 스토리 지침에 붙여 넣어 주세요.'), show);
+      return;
+    }
     if (act === 'fix-brackets') {
-      if (!confirm('마리나라 TTS 설정의 "대괄호 텍스트 건너뛰기"를 끕니다. 다른 TTS 설정은 그대로 둡니다. 진행할까요?')) return;
-      return busy(t, async () => { const c = await api('/api/tts/config'); await api('/api/tts/config', 'PUT', { ...c, skipBracketedText: false }); await loadTtsConfig(); });
+      ask('대괄호 건너뛰기 끄기', '마리나라 TTS 설정의 "대괄호 텍스트 건너뛰기"를 끕니다. 다른 TTS 설정은 그대로 둡니다.', { ok: '끄기' }).then(ok => {
+        if (ok) busy(t, async () => { const c = await api('/api/tts/config'); await api('/api/tts/config', 'PUT', { ...c, skipBracketedText: false }); await loadTtsConfig(); });
+      });
     }
   }
   function onChange(e) {
     const t = e.target, run = t.dataset.run, w = world(run);
     if (t.dataset.g === 'volume') { save(); return; }
     if (!w || t.tagName !== 'SELECT') return;
-    let value = t.value;
-    if (value === '__custom') { value = (prompt('ElevenLabs 보이스 ID를 입력해 주세요.') || '').trim(); if (!value) return refresh(); }
+    if (t.value === '__custom') {
+      ask('보이스 ID 입력', 'ElevenLabs 보이스 ID를 입력해 주세요.', { input: true }).then(v => { v = (v || '').trim(); if (v) setVoice(t, w, v); else refresh(); });
+      return;
+    }
+    setVoice(t, w, t.value);
+  }
+  function setVoice(t, w, value) {
     if (t.dataset.wv) w[t.dataset.wv] = value;
     else if (t.dataset.spk) { const s = w.speakers[t.dataset.spk]; if (s) s.voice = value; }
     save();
