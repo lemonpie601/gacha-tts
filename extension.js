@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.5.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.5.1 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -39,25 +39,69 @@
   }
 
   // 다른 기기와 설정 동기화 (마리나라 확장 저장소, 설정만이라 작음).
+  // 통째로 덮어쓰면 스토리만 진행한 기기가 다른 기기에서 고른 보이스를 지워 버리므로, 사용자가 바꾼 시각(t, gt)으로 항목별로 합칩니다.
+  const WORLD_KEYS = ['name', 'auto', 'narrate', 'narrator', 'fallback', 'emotion'];
+  function mergeData(local, remote) {
+    if (!remote || remote.v !== 1 || typeof remote.worlds !== 'object') return false;
+    let changed = false;
+    const take = (to, from, keys) => { for (const k of keys) if (k in from && to[k] !== from[k]) { to[k] = from[k]; changed = true; } };
+    for (const [id, rw] of Object.entries(remote.worlds || {})) {
+      if (!rw || typeof rw !== 'object') continue;
+      const lw = local.worlds[id];
+      if (!lw) { local.worlds[id] = { ...blankWorld(rw.name), ...rw, speakers: { ...(rw.speakers || {}) } }; changed = true; continue; }
+      if ((rw.t || 0) > (lw.t || 0)) { take(lw, rw, WORLD_KEYS); lw.t = rw.t; }
+      else if (!rw.t && !lw.t) { for (const k of ['narrator', 'fallback']) if (!lw[k] && rw[k]) { lw[k] = rw[k]; changed = true; } }
+      if (rw.linkedOnce && !lw.linkedOnce) { lw.linkedOnce = true; changed = true; }
+      for (const [k, rs] of Object.entries(rw.speakers || {})) {
+        if (!rs || typeof rs !== 'object') continue;
+        const ls = lw.speakers[k];
+        if (!ls) { lw.speakers[k] = { ...rs }; changed = true; continue; }
+        if ((rs.t || 0) > (ls.t || 0)) { take(ls, rs, ['voice', 'mute']); ls.t = rs.t; }
+        else if (!rs.t && !ls.t && !ls.voice && rs.voice) { ls.voice = rs.voice; changed = true; }
+        if (rs.prota && !ls.prota) { ls.prota = true; changed = true; }
+        if ((rs.lines || 0) > (ls.lines || 0)) ls.lines = rs.lines;
+      }
+    }
+    if ((remote.gt || 0) > (local.gt || 0) && remote.global) { local.global = { ...initial().global, ...remote.global }; local.gt = remote.gt; changed = true; }
+    const RL = remote.lore;
+    if (RL && RL.id && (!local.lore.id || (RL.id !== local.lore.id && (remote.at || 0) > (local.at || 0)))) { local.lore = { ...initial().lore, ...RL }; changed = true; }
+    return changed;
+  }
   let syncT = 0;
   function host() { try { const m = typeof marinara === 'object' && marinara ? marinara : globalThis.marinara; return m && m.storage && typeof m.storage.get === 'function' && typeof m.storage.patch === 'function' ? m : null; } catch { return null; } }
-  function syncSchedule() {
-    const h = host(); if (!h) return;
+  function syncSchedule(ms = 1500) {
+    if (!host()) return;
     if (syncT) clearTimeout(syncT);
-    syncT = setTimeout(() => { syncT = 0; h.storage.patch({ gtts: { at: data.at, json: JSON.stringify({ ...data, world: undefined }) } }).catch(() => {}); }, 4000);
+    syncT = setTimeout(() => { syncT = 0; syncPush(); }, ms);
   }
-  async function syncPull() {
+  // 올리기 직전에 서버 쪽을 먼저 합쳐, 다른 기기가 그 사이 바꾼 보이스를 덮지 않습니다.
+  async function syncPush() {
     const h = host(); if (!h) return;
     try {
       const rec = (await h.storage.get())?.gtts;
-      if (!rec || !(rec.at > (data.at || 0))) { if (!rec && Object.keys(data.worlds).length) syncSchedule(); return; }
-      const remote = JSON.parse(rec.json);
-      if (!remote || remote.v !== 1) return;
-      data = { ...initial(), ...remote, world: data.world, global: { ...initial().global, ...remote.global }, lore: { ...initial().lore, ...remote.lore } };
-      try { localStorage.setItem(STORE, JSON.stringify(data)); } catch {}
-      refresh();
+      if (rec?.json && mergeData(data, JSON.parse(rec.json))) applyMerged();
+      await h.storage.patch({ gtts: { at: data.at, json: JSON.stringify({ ...data, world: undefined }) } });
     } catch {}
   }
+  function flushSync() { if (syncT) { clearTimeout(syncT); syncT = 0; syncPush(); } }
+  function applyMerged() {
+    try { localStorage.setItem(STORE, JSON.stringify(data)); } catch {}
+    const w = current();
+    if (lastLine && w) lastLine.voice = voiceFor(w, lastLine);
+    refresh();
+  }
+  let pulling = false;
+  async function syncPull() {
+    const h = host(); if (!h || pulling) return;
+    pulling = true;
+    try {
+      const rec = (await h.storage.get())?.gtts;
+      if (!rec) { if (Object.keys(data.worlds).length) syncSchedule(); return; }
+      if (mergeData(data, JSON.parse(rec.json))) applyMerged();
+    } catch {} finally { pulling = false; }
+  }
+  // 사용자가 직접 바꾼 설정만 시각을 남깁니다. 스토리 진행으로 바뀌는 화자 줄 수 등은 시각을 바꾸지 않습니다.
+  function touched(o) { o.t = Date.now(); }
 
   // ---------- 마리나라 API ----------
   async function api(path, method = 'GET', body) {
@@ -220,7 +264,15 @@
         const speaker = String(s.speaker || '').trim();
         const sp = rememberSpeaker(w, speaker);
         if (sp) { sp.lines = (sp.lines || 0) + 1; changed = true; }
-        list.push({ speaker, text, plain: stripTags(text), n: norm(text) });
+        const item = { speaker, text, plain: stripTags(text), n: norm(text) };
+        // Gacha Choice(대답 선택지) 패치: 고른 답의 대사(choice.options[].lines)는 장면 대사 번호가 그대로인 채로 나옵니다.
+        const opts = Array.isArray(s.choice?.options) ? s.choice.options : null;
+        if (opts) item.choice = opts.slice(0, 4).map(o => (Array.isArray(o?.lines) ? o.lines : []).slice(0, 3).filter(y => y && typeof y.text === 'string' && y.text.trim()).map(y => {
+          const sp = String(y.speaker || '').trim(), r = rememberSpeaker(w, sp);
+          if (r) changed = true;
+          return { speaker: sp, text: y.text, plain: stripTags(y.text), n: norm(y.text) };
+        }));
+        list.push(item);
       }
       if (list.length) {
         const chapter = String(req.chapter ?? v.chapter ?? v.beat?.chapter ?? '');
@@ -237,7 +289,7 @@
   }
   // 대사의 영어 감정 태그는 화면에서 숨깁니다. 음성용 원문은 위에서 따로 보관합니다.
   function stripDeep(v, key, depth = 0) {
-    if (depth > 8 || v == null) return [v, false];
+    if (depth > 12 || v == null) return [v, false];
     if (typeof v === 'string') { if (!TEXT_KEYS.has(key)) return [v, false]; const s = stripTags(v); return [s, s !== v]; }
     if (Array.isArray(v)) { let ch = false; const out = v.map(x => { const [y, c] = stripDeep(x, key, depth + 1); ch = ch || c; return y; }); return [ch ? out : v, ch]; }
     if (typeof v === 'object') { let ch = false; const out = {}; for (const [k, x] of Object.entries(v)) { const [y, c] = stripDeep(x, k.toLowerCase(), depth + 1); out[k] = y; ch = ch || c; } return [ch ? out : v, ch]; }
@@ -301,15 +353,22 @@
     if (narr) return w.narrate ? w.narrator || '' : '';
     const s = w.speakers[keyOf(seg.speaker)];
     if (s?.mute) return '';
-    return s?.voice || w.fallback || '';
+    return s?.voice || aliasVoice(w, keyOf(seg.speaker)) || w.fallback || '';
+  }
+  // 대사의 화자 이름이 등장인물 이름과 조금 다를 때(예: '도윤' / '한도윤') 보이스를 지정한 쪽을 씁니다. 후보가 하나일 때만.
+  function aliasVoice(w, k) {
+    if (k.length < 2) return '';
+    const hits = Object.entries(w.speakers).filter(([n, x]) => n !== k && x.voice && !x.mute && n.length >= 2 && (n.includes(k) || k.includes(n)));
+    return hits.length === 1 ? hits[0][1].voice : '';
   }
   // 타자기 효과 중에도 주기적으로 보도록 디바운스가 아니라 스로틀로 둡니다.
   function schedule(ms = 120) { if (tickT) return; tickT = setTimeout(() => { tickT = 0; tick(); }, ms); }
+  let lastHit = null;
   function tick(retry = 0) {
     if (!data.global.enabled) return;
     const vn = vnState(); if (!vn) return;
     const k = vn.caption + '|' + vn.line + '/' + vn.total + (vn.line ? '' : '|' + norm(vn.text).slice(0, 40));
-    if (k === matchedKey) return;
+    if (k === matchedKey) { if (lastHit?.seg.choice) branchTick(vn); return; }
     if (k !== lineKey) { lineKey = k; if (data.global.interrupt && lastLine) stop(); }
     const w = current();
     const hit = w && matchLine(vn, beats, data.world);
@@ -318,16 +377,38 @@
       if (retry < 4) { if (settleT) clearTimeout(settleT); settleT = setTimeout(() => { settleT = 0; if (lineKey === k) tick(retry + 1); }, 450); }
       return;
     }
-    matchedKey = k;
+    matchedKey = k; lastHit = hit;
     const id = hit.beat.chapter + ':' + hit.beat.index + ':' + hit.i + ':' + hash(hit.seg.text);
     if (lastLine?.id === id) return;
-    lastLine = { id, speaker: hit.seg.speaker, text: hit.seg.text, plain: hit.seg.plain, voice: voiceFor(w, hit.seg) };
-    refresh();
-    if (w.auto && lastLine.voice) play(lastLine.voice, speechText(lastLine.text), lastLine.speaker, id);
+    speak(w, hit.seg, id);
     if (data.global.prefetch) {
       const next = hit.beat.segments[hit.i + 1], nv = next && voiceFor(w, next);
       if (nv) fetchClip(nv, speechText(next.text), next.speaker).catch(() => {});
     }
+  }
+  function speak(w, seg, id) {
+    lastLine = { id, speaker: seg.speaker, text: seg.text, plain: seg.plain, voice: voiceFor(w, seg) };
+    refresh();
+    if (w.auto && lastLine.voice) play(lastLine.voice, speechText(lastLine.text), lastLine.speaker, id);
+  }
+  // 대답 선택지를 고른 뒤 나오는 답 대사: 대사 번호가 그대로라 화면 글자로만 구분합니다.
+  function branchTick(vn) {
+    const w = current(); if (!w) return;
+    const vis = norm(vn.lineText || vn.text), part = norm(vn.lineText);
+    // 아직 질문 대사(선택지가 붙은 줄)가 보이는 중이면 답 대사가 아닙니다.
+    if (lastHit.seg.n && vis.includes(lastHit.seg.n)) return;
+    let best = null, partial = [];
+    lastHit.seg.choice.forEach((lines, o) => lines.forEach((l, j) => {
+      if (!l.n) return;
+      if (vis.includes(l.n)) { if (!best || l.n.length > best.l.n.length) best = { l, o, j }; }
+      else if (part.length >= 4 && l.n.startsWith(part)) partial.push({ l, o, j });
+    }));
+    if (!best && partial.length === 1) best = partial[0];
+    if (!best) return;
+    const id = lastHit.beat.chapter + ':' + lastHit.beat.index + ':' + lastHit.i + ':c' + best.o + '.' + best.j + ':' + hash(best.l.text);
+    if (lastLine?.id === id) return;
+    if (data.global.interrupt) stop();
+    speak(w, best.l, id);
   }
   function replay() {
     if (playingKey) return stop();
@@ -495,7 +576,9 @@
       if (gameRoot) {
         gameObserver = new MutationObserver(records => {
           if (records.every(r => view.root.contains(r.target))) return;
-          placeButtons(); schedule(); mountSettings();
+          placeButtons(); schedule();
+          // 대사 글자(타자기 효과)·선택지 버튼 변화마다 설정 화면을 찾으면 레이아웃 계산이 반복돼 느려지므로 건너뜁니다.
+          if (records.some(r => { const el = r.target.nodeType === 1 ? r.target : r.target.parentElement; return !el?.closest?.('.vn'); })) mountSettings();
         });
         gameObserver.observe(gameRoot, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-screen', 'hidden'] });
       }
@@ -738,21 +821,21 @@
     const run = t.dataset.run, w = world(run);
     if (t.getAttribute('role') === 'checkbox') {
       const on = t.getAttribute('aria-checked') !== 'true';
-      if (t.dataset.g) { data.global[t.dataset.g] = on; save(); paintButton(); return refresh(); }
+      if (t.dataset.g) { data.global[t.dataset.g] = on; data.gt = Date.now(); save(); paintButton(); return refresh(); }
       if (t.dataset.w && w) {
-        const k = t.dataset.w; w[k] = on; save(); paintButton();
+        const k = t.dataset.w; w[k] = on; touched(w); save(); paintButton();
         if (k === 'emotion') connect(run, on).catch(err => { w.loreError = String(err.message || err); save(); }).finally(refresh);
         return refresh();
       }
       return;
     }
-    if (t.dataset.mute && w) { const s = w.speakers[t.dataset.mute]; if (s) { s.mute = !s.mute; save(); if (lastLine && current() === w) lastLine.voice = voiceFor(w, lastLine); } return refresh(); }
+    if (t.dataset.mute && w) { const s = w.speakers[t.dataset.mute]; if (s) { s.mute = !s.mute; touched(s); save(); if (lastLine && current() === w) lastLine.voice = voiceFor(w, lastLine); } return refresh(); }
     const act = t.dataset.act;
     if (act === 'replay') { replay(); return refresh(); }
     if (act === 'preview') { const v = t.dataset.voice; if (v) play(v, SAMPLE_TEXT, '', 'preview:' + v); return; }
     if (act === 'reload-voices') return busy(t, loadVoices);
     if (act === 'add-speaker' && w) { ask('화자 추가', '가챠 포지 대사에 표시되는 이름 그대로 적어 주세요.', { input: true, ok: '추가' }).then(n => { if (n && n.trim() && rememberSpeaker(w, n)) { save(); refresh(); } }); return; }
-    if (act === 'link' && w) { w.emotion = true; return busy(t, () => connect(run, true)); }
+    if (act === 'link' && w) { w.emotion = true; touched(w); return busy(t, () => connect(run, true)); }
     if (act === 'unlink' && w) return busy(t, () => connect(run, false));
     if (act === 'check-link') return busy(t, () => readLore(run));
     if (act === 'reset-lore') {
@@ -774,7 +857,7 @@
   }
   function onChange(e) {
     const t = e.target, run = t.dataset.run, w = world(run);
-    if (t.dataset.g === 'volume') { save(); return; }
+    if (t.dataset.g === 'volume') { data.gt = Date.now(); save(); return; }
     if (!w || t.tagName !== 'SELECT') return;
     if (t.value === '__custom') {
       ask('보이스 ID 입력', 'ElevenLabs 보이스 ID를 입력해 주세요.', { input: true }).then(v => { v = (v || '').trim(); if (v) setVoice(t, w, v); else refresh(); });
@@ -783,8 +866,8 @@
     setVoice(t, w, t.value);
   }
   function setVoice(t, w, value) {
-    if (t.dataset.wv) w[t.dataset.wv] = value;
-    else if (t.dataset.spk) { const s = w.speakers[t.dataset.spk]; if (s) s.voice = value; }
+    if (t.dataset.wv) { w[t.dataset.wv] = value; touched(w); }
+    else if (t.dataset.spk) { const s = w.speakers[t.dataset.spk]; if (s) { s.voice = value; touched(s); } }
     save();
     if (lastLine && current() === w) lastLine.voice = voiceFor(w, lastLine);
     refresh();
@@ -796,7 +879,12 @@
   setTimeout(() => upgradeLoreText().catch(() => {}), 4000);
   mount();
   new MutationObserver(() => { if (!gameRoot || !gameHost?.isConnected) mount(); }).observe(document.documentElement, { childList: true, subtree: true });
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncPull(); else stop(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncPull(); else { stop(); flushSync(); } });
+  addEventListener('pagehide', flushSync);
+  // 같은 기기의 다른 탭에서 바꾼 설정
+  addEventListener('storage', e => { if (e.key !== STORE || !e.newValue) return; try { if (mergeData(data, JSON.parse(e.newValue))) applyMerged(); } catch {} });
+  // 다른 기기에서 바꾼 보이스를 새로고침 없이 받아옵니다.
+  setInterval(() => { if (document.visibilityState !== 'hidden') syncPull(); }, 20000);
 
-  globalThis.__gfTts = { clips, fetchClip, upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
+  globalThis.__gfTts = { clips, mergeData, fetchClip, upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
 })();

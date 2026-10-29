@@ -12,6 +12,7 @@ const played=[];
 win.URL.createObjectURL=()=>'blob:x';win.URL.revokeObjectURL=()=>{};
 win.Audio=function(u){this.src=u;this.play=async()=>{played.push(u)};this.pause=()=>{};};
 win.fetch=async(u,o={})=>{u=String(u);calls.push([o.method||'GET',u,o.body]);
+  if(u.includes('/api/gacha-forge/beat-choice'))return json({ok:true,beat:{chapter:4,storyIndex:0,segments:[{speaker:'한도윤',text:'[curious] 같이 갈래?',choice:{key:'abcdef12',options:[{label:'좋아',lines:[{speaker:'홍길동',text:'[happy] 좋아, 가자.'},{speaker:'한도윤',text:'[warm] 그래.'}]},{label:'싫어',lines:[{speaker:'홍길동',text:'[cold] 싫어.'}]}]}},{speaker:'',text:'둘은 길을 나섰다.'}]}});
   if(u.includes('/api/gacha-forge/beat'))return json({ok:true,cast:[{name:'한도윤'},{name:'홍길동',prota:true}],segments:[{speaker:'',text:'바람이 분다.'},{speaker:'한도윤',text:'[excited] 가자! [whispers] 조용히.'},{speaker:'[시스템]',text:'[시스템] 알림'}]});
   if(u.includes('/api/gacha-forge/state'))return json({runs:[{runId:'run-1',name:'서울 월드',lore:runLore}]});
   if(u.includes('/api/gacha-forge/run/lorebooks')){runLore=JSON.parse(o.body).lore;return json({ok:true,lore:runLore});}
@@ -121,5 +122,26 @@ win.eval(src);
   assert.strictEqual(await T.upgradeLoreText(),false);assert.strictEqual(entryContent,'내가 고친 지침','edited kept');assert.ok(T.data.lore.edited);
   assert.strictEqual(await T.upgradeLoreText(true),true);assert.strictEqual(entryContent,guide,'forced reset');assert.ok(!T.data.lore.edited);
   assert.deepStrictEqual(native,[],'no native alert/confirm/prompt');
+  // Gacha Choice: the picked answer's lines play under the same line number and are voiced too
+  const r2=await win.fetch('/api/gacha-forge/beat-choice',{method:'POST',body:JSON.stringify({runId:'run-1',chapter:4,storyIndex:0})});
+  const j2=await r2.json();assert.strictEqual(j2.beat.segments[0].choice.options[0].lines[0].text,'좋아, 가자.','deep choice tags stripped on screen');
+  const w1=T.data.worlds['run-1'];w1.speakers['홍길동'].voice='v2';w1.speakers['한도윤'].voice='v1';
+  const sp0=calls.filter(c=>c[1].includes('/api/tts/speak')).length;
+  sr.querySelector('.vn-caption').textContent='4챕터';sr.querySelector('.vn-line').textContent='같이 갈래?';sr.querySelector('.vn-count').textContent='01 / 2';await sleep(400);
+  let sp=calls.filter(c=>c[1].includes('/api/tts/speak')).slice(sp0);assert.strictEqual(sp.length,1,'question voiced');
+  sr.querySelector('.vn-line').textContent='좋아, 가자.';await sleep(400);
+  sp=calls.filter(c=>c[1].includes('/api/tts/speak')).slice(sp0);assert.strictEqual(sp.length,2,'branch line voiced: '+sp.length);
+  assert.deepStrictEqual(JSON.parse(sp[1][2]),{text:'[happy] 좋아, 가자.',voice:'v2',speaker:'홍길동'});
+  sr.querySelector('.vn-line').textContent='그래.';await sleep(400);
+  sp=calls.filter(c=>c[1].includes('/api/tts/speak')).slice(sp0);assert.strictEqual(sp.length,3,'second branch line voiced');
+  assert.strictEqual(JSON.parse(sp[2][2]).voice,'v1');
+  // name variant falls back to the speaker that has a voice
+  assert.strictEqual(T.voiceFor(w1,{speaker:'도윤'}),'v1','alias voice');
+  // sync: a device that only played the story must not wipe a voice picked on another device
+  const local={v:1,at:999999999999999,worlds:{'run-1':{...w1,speakers:{'한도윤':{name:'한도윤',voice:'',lines:9}}}},global:{},lore:{}};
+  const remote={v:1,at:1,worlds:{'run-1':{speakers:{'한도윤':{name:'한도윤',voice:'v9',t:5}}}},global:{},lore:{}};
+  assert.ok(T.mergeData(local,remote));assert.strictEqual(local.worlds['run-1'].speakers['한도윤'].voice,'v9','newer pick wins');
+  local.worlds['run-1'].speakers['한도윤'].voice='v8';local.worlds['run-1'].speakers['한도윤'].t=9;
+  T.mergeData(local,remote);assert.strictEqual(local.worlds['run-1'].speakers['한도윤'].voice,'v8','older remote ignored');
   console.log('ALL PASS');process.exit(0);
 })().catch(e=>{console.error(e);process.exit(1);});
