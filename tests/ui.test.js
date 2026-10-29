@@ -164,8 +164,21 @@ win.eval(src);
   // Marinara saving its TTS settings is picked up
   ttsCfg={...ttsCfg,speed:0.8};await win.fetch('/api/tts/config',{method:'PUT',body:'{}'});await sleep(30);assert.ok(T.speedTag().includes('0.8'),'reload after PUT');
   ttsCfg={...ttsCfg,model:'eleven_v3',speed:1.1};await T.loadTtsConfig();
+  // fast skip: the number changes before the text; the old text must not claim the new line
+  sr.querySelector('.vn-caption').textContent='3챕터 · 공방';
+  sr.querySelector('.vn-line').textContent='바람이 분다.';sr.querySelector('.vn-count').textContent='01 / 3';await sleep(300);
+  const pl0=played.length;
+  sr.querySelector('.vn-count').textContent='02 / 3';await sleep(250);
+  sr.querySelector('.vn-line').textContent='가자! 조용히.';await sleep(500);
+  assert.strictEqual(played.length,pl0+1,'new line read after fast skip');
+  // listen button reads what is on screen now, and narration explains why it is silent
+  sr.querySelector('[data-gtts="speak"]').hasAttribute('data-on')&&sr.querySelector('[data-gtts="speak"]').click();
+  sr.querySelector('.vn-line').textContent='바람이 분다.';sr.querySelector('.vn-count').textContent='01 / 3';await sleep(300);
+  sr.querySelector('[data-gtts="speak"]').click();await sleep(20);
+  assert.ok(sr.querySelector('.gtts-toast').textContent.includes('내레이션도 읽기'),'narration hint');
   // leaving the story stops the voice
-  sr.querySelector('.vn-line').textContent='같이 갈래?';await sleep(50);sr.querySelector('.vn-line').textContent='좋아, 가자.';await sleep(300);
+  sr.querySelector('.vn-caption').textContent='4챕터';sr.querySelector('.vn-count').textContent='01 / 2';
+  sr.querySelector('.vn-line').textContent='같이 갈래?';await sleep(300);sr.querySelector('.vn-line').textContent='좋아, 가자.';await sleep(600);
   assert.ok(sr.querySelector('[data-gtts="speak"]').hasAttribute('data-on'),'playing before leaving');
   sr.querySelector('.vn').setAttribute('hidden','');await sleep(50);
   assert.ok(!sr.querySelector('[data-gtts="speak"]').hasAttribute('data-on'),'stopped after leaving story');

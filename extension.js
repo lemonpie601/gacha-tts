@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.6.2 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.6.3 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -415,7 +415,7 @@
     if (k === matchedKey) { if (lastHit?.seg.choice) branchTick(vn); return; }
     if (k !== lineKey) { lineKey = k; if (data.global.interrupt && lastLine) stop(); }
     const w = current();
-    const hit = w && matchLine(vn, beats, data.world);
+    const hit = w && screenHit(vn);
     if (!hit) {
       // 타자기 효과로 글자가 아직 다 나오지 않았을 수 있어 잠시 뒤 다시 봅니다.
       if (retry < 4) { if (settleT) clearTimeout(settleT); settleT = setTimeout(() => { settleT = 0; if (lineKey === k) tick(retry + 1); }, 450); }
@@ -430,10 +430,22 @@
       if (nv) fetchClip(nv, speechText(next.text), next.speaker).catch(() => {});
     }
   }
+  // 빠르게 넘기면 대사 번호가 먼저 바뀌고 글자는 앞 대사가 잠시 남아 있습니다. 그때 앞 대사로 잘못 맞추면
+  // 새 대사를 그 번호에 묶어 버려 읽지 않으므로, 장면의 대사 수가 번호와 맞을 때는 번호가 가리키는 줄만 받습니다.
+  function screenHit(vn) {
+    const hit = matchLine(vn, beats, data.world);
+    if (hit && vn.line && vn.total && hit.beat.segments.length === vn.total && hit.i !== vn.line - 1) return null;
+    return hit;
+  }
+  const AUTO_DELAY = 200;
   function speak(w, seg, id) {
     lastLine = { id, speaker: seg.speaker, text: seg.text, plain: seg.plain, voice: voiceFor(w, seg) };
     refresh();
-    if (w.auto && lastLine.voice) play(lastLine.voice, speechText(lastLine.text), lastLine.speaker, id, toneKeyOf(seg));
+    if (!w.auto || !lastLine.voice) return;
+    const voice = lastLine.voice, text = speechText(lastLine.text), tk = toneKeyOf(seg);
+    // 이미 만든 음성은 바로, 새로 만들 음성은 잠깐 기다렸다가 그대로 보고 있을 때만 만듭니다. 빠르게 넘긴 대사에 요금이 들지 않게 합니다.
+    if (clips.has(clipKey(voice, text + speedTag()))) return play(voice, text, seg.speaker, id, tk);
+    setTimeout(() => { if (lastLine?.id === id) play(voice, text, seg.speaker, id, tk); }, AUTO_DELAY);
   }
   // 대답 선택지를 고른 뒤 나오는 답 대사: 대사 번호가 그대로라 화면 글자로만 구분합니다.
   function branchTick(vn) {
@@ -456,9 +468,23 @@
   }
   function replay() {
     if (playingKey) return stop();
+    const w = current();
+    // 누른 순간 화면의 대사를 다시 찾습니다. 앞에서 놓친 대사가 남아 있어도 지금 보이는 대사를 읽습니다.
+    const vn = vnState(), branch = lastLine?.id?.includes(':c') && lineKey === matchedKey;
+    if (w && vn && !branch) {
+      const hit = screenHit(vn);
+      if (hit) {
+        const id = hit.beat.chapter + ':' + hit.beat.index + ':' + hit.i + ':' + hash(hit.seg.text);
+        matchedKey = lineKey; lastHit = hit;
+        if (lastLine?.id !== id) lastLine = { id, speaker: hit.seg.speaker, text: hit.seg.text, plain: hit.seg.plain, voice: voiceFor(w, hit.seg) };
+      }
+    }
     if (!lastLine) return notify('아직 인식한 대사가 없습니다. 스토리를 진행해 주세요.');
-    const w = current(); const voice = w ? voiceFor(w, lastLine) : '';
-    if (!voice) return notify((lastLine.speaker || '내레이션') + '에 지정된 보이스가 없습니다. 설정 → TTS에서 지정해 주세요.', 'bad');
+    const voice = w ? voiceFor(w, lastLine) : '';
+    if (!voice) {
+      if (NARRATOR_RE.test(lastLine.speaker || '')) return notify(w?.narrate ? '내레이터 보이스가 없습니다. 설정 → TTS에서 골라 주세요.' : '지금 대사는 내레이션입니다. 내레이션은 설정 → TTS의 "내레이션도 읽기"를 켜야 읽습니다.', 'bad');
+      return notify(lastLine.speaker + (w?.speakers[keyOf(lastLine.speaker)]?.mute ? '은(는) 끔으로 설정되어 있습니다.' : '에 지정된 보이스가 없습니다. 설정 → TTS에서 지정해 주세요.'), 'bad');
+    }
     play(voice, speechText(lastLine.text), lastLine.speaker, lastLine.id, toneKeyOf(lastLine));
   }
 
@@ -977,5 +1003,5 @@
   // 다른 기기에서 바꾼 보이스를 새로고침 없이 받아옵니다.
   setInterval(() => { if (document.visibilityState !== 'hidden') syncPull(); }, 20000);
 
-  globalThis.__gfTts = { clips, speedTag, loadTtsConfig, mergeData, toneOf, get audio() { return audio; }, fetchClip, upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
+  globalThis.__gfTts = { get lastLine() { return lastLine; }, clips, speedTag, loadTtsConfig, mergeData, toneOf, get audio() { return audio; }, fetchClip, upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
 })();
