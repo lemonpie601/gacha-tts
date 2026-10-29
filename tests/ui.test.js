@@ -12,6 +12,7 @@ const played=[];let ttsCfg={enabled:true,source:'elevenlabs',model:'eleven_v3',s
 win.URL.createObjectURL=()=>'blob:x';win.URL.revokeObjectURL=()=>{};
 win.Audio=function(u){this.src=u;this.volume=1;this.playbackRate=1;this.play=async()=>{played.push(u)};this.pause=()=>{};};
 win.fetch=async(u,o={})=>{u=String(u);calls.push([o.method||'GET',u,o.body]);
+  if(u.includes('/api/gacha-forge/cast-g'))return json({ok:true,cast:[{name:'서하',gender:'female'}]});
   if(u.includes('/api/gacha-forge/beat-choice'))return json({ok:true,beat:{chapter:4,storyIndex:0,segments:[{speaker:'한도윤',text:'[curious] 같이 갈래?',choice:{key:'abcdef12',options:[{label:'좋아',lines:[{speaker:'홍길동',text:'[happy] 좋아, 가자.'},{speaker:'한도윤',text:'[warm] 그래.'}]},{label:'싫어',lines:[{speaker:'홍길동',text:'[cold] 싫어.'}]}]}},{speaker:'',text:'둘은 길을 나섰다.'}]}});
   if(u.includes('/api/gacha-forge/beat'))return json({ok:true,cast:[{name:'한도윤'},{name:'홍길동',prota:true}],segments:[{speaker:'',text:'바람이 분다.'},{speaker:'한도윤',text:'[excited] 가자! [whispers] 조용히.'},{speaker:'[시스템]',text:'[시스템] 알림'}]});
   if(u.includes('/api/gacha-forge/state'))return json({runs:[{runId:'run-1',name:'서울 월드',lore:runLore}]});
@@ -176,6 +177,20 @@ win.eval(src);
   sr.querySelector('.vn-line').textContent='바람이 분다.';sr.querySelector('.vn-count').textContent='01 / 3';await sleep(300);
   sr.querySelector('[data-gtts="speak"]').click();await sleep(20);
   assert.ok(sr.querySelector('.gtts-toast').textContent.includes('내레이션도 읽기'),'narration hint');
+  // female / male default voices
+  const wg=T.data.worlds['run-1'];wg.fallbackF='vf';wg.fallbackM='vm';wg.speakers['공방장'].gender='f';
+  assert.strictEqual(T.voiceFor(wg,{speaker:'공방장'}),'vf','female default');wg.speakers['공방장'].gender='m';
+  assert.strictEqual(T.voiceFor(wg,{speaker:'공방장'}),'vm','male default');wg.speakers['공방장'].gender='';
+  assert.strictEqual(T.voiceFor(wg,{speaker:'공방장'}),wg.fallback,'no gender: common default');
+  assert.strictEqual(T.voiceFor(wg,{speaker:'한도윤'}),'v1','own voice wins');
+  await win.fetch('/api/gacha-forge/cast-g',{method:'POST',body:JSON.stringify({runId:'run-1'})});
+  assert.strictEqual(wg.speakers['서하'].gender,'f','gender from game data');assert.strictEqual(T.voiceFor(wg,{speaker:'서하'}),'vf');
+  sr.querySelector('.st-rail [data-gtts="tab"]').click();await sleep(50);
+  const gb=()=>sr.querySelector('[data-gtts-view] [data-act="gender"][data-k="서하"]');assert.strictEqual(gb().textContent,'여');
+  gb().click();await sleep(20);assert.strictEqual(wg.speakers['서하'].gender,'m');assert.strictEqual(gb().textContent,'남');
+  assert.ok(sr.querySelector('[data-gtts-view] select[data-wv="fallbackF"]')&&sr.querySelector('[data-gtts-view] select[data-wv="fallbackM"]'),'gender default selects');
+  await win.fetch('/api/gacha-forge/cast-g',{method:'POST',body:JSON.stringify({runId:'run-1'})});assert.strictEqual(wg.speakers['서하'].gender,'m','user choice kept');
+  sr.querySelector('.st-sect:not([data-gtts])').click();await sleep(30);
   // leaving the story stops the voice
   sr.querySelector('.vn-caption').textContent='4챕터';sr.querySelector('.vn-count').textContent='01 / 2';
   sr.querySelector('.vn-line').textContent='같이 갈래?';await sleep(300);sr.querySelector('.vn-line').textContent='좋아, 가자.';await sleep(600);
