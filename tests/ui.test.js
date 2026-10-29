@@ -28,6 +28,7 @@ win.fetch=async(u,o={})=>{u=String(u);calls.push([o.method||'GET',u,o.body]);
   return json({},false);};
 const host=doc.createElement('marinara-capability-gacha-forge');doc.body.append(host);
 const sr=host.attachShadow({mode:'open'});sr.innerHTML='<div class="bar"><button class="gf-fs-bar icon-button">⛶</button></div><div class="vn"><span class="vn-caption">3챕터 · 공방</span><div class="vn-tools"><button class="vn-tool" data-auto>Auto</button><button class="vn-tool" data-skip>Skip</button></div><p class="vn-line">…</p><span class="vn-count">01 / 3</span></div>';
+win.Element.prototype.getClientRects=function(){return this.closest('[data-gone]')?[]:[1];};
 win.eval(src);
 (async()=>{
   const sb=sr.querySelector('.vn-tools [data-gtts="speak"]');assert.ok(sb&&sb.classList.contains('vn-tool'),'listen button in story toolbar');
@@ -163,6 +164,12 @@ win.eval(src);
   // Marinara saving its TTS settings is picked up
   ttsCfg={...ttsCfg,speed:0.8};await win.fetch('/api/tts/config',{method:'PUT',body:'{}'});await sleep(30);assert.ok(T.speedTag().includes('0.8'),'reload after PUT');
   ttsCfg={...ttsCfg,model:'eleven_v3',speed:1.1};await T.loadTtsConfig();
+  // leaving the story stops the voice
+  sr.querySelector('.vn-line').textContent='같이 갈래?';await sleep(50);sr.querySelector('.vn-line').textContent='좋아, 가자.';await sleep(300);
+  assert.ok(sr.querySelector('[data-gtts="speak"]').hasAttribute('data-on'),'playing before leaving');
+  sr.querySelector('.vn').setAttribute('hidden','');await sleep(50);
+  assert.ok(!sr.querySelector('[data-gtts="speak"]').hasAttribute('data-on'),'stopped after leaving story');
+  sr.querySelector('.vn').removeAttribute('hidden');
   // sync: a device that only played the story must not wipe a voice picked on another device
   const local={v:1,at:999999999999999,worlds:{'run-1':{...w1,speakers:{'한도윤':{name:'한도윤',voice:'',lines:9}}}},global:{},lore:{}};
   const remote={v:1,at:1,worlds:{'run-1':{speakers:{'한도윤':{name:'한도윤',voice:'v9',t:5}}}},global:{},lore:{}};

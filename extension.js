@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.6.1 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.6.2 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -612,6 +612,13 @@
     tools.prepend(b);
     paintButton();
   }
+  // 스토리 화면(.vn)이 사라지거나 가려지면(타이틀·월드 목록으로 나가기, 가챠 포지 닫기) 대사 음성을 멈춥니다. 설정 화면의 미리 듣기는 그대로 둡니다.
+  function storyShown() {
+    const vn = gameHost?.isConnected && gameRoot?.querySelector('.vn');
+    return !!(vn && vn.isConnected && !vn.closest('[hidden]') && vn.getClientRects().length);
+  }
+  function stopIfLeft() { if (playingKey && !playingKey.startsWith('preview:') && !storyShown()) stop(); }
+  setInterval(stopIfLeft, 700);
   function mount() {
     const h = document.querySelector(HOST_TAG);
     if (h !== gameHost || (h && h.shadowRoot !== gameRoot)) {
@@ -620,14 +627,14 @@
       if (gameRoot) {
         gameObserver = new MutationObserver(records => {
           if (records.every(r => view.root.contains(r.target))) return;
-          placeButtons(); schedule();
+          placeButtons(); schedule(); stopIfLeft();
           // 대사 글자(타자기 효과)·선택지 버튼 변화마다 설정 화면을 찾으면 레이아웃 계산이 반복돼 느려지므로 건너뜁니다.
           if (records.some(r => { const el = r.target.nodeType === 1 ? r.target : r.target.parentElement; return !el?.closest?.('.vn'); })) mountSettings();
         });
         gameObserver.observe(gameRoot, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-screen', 'hidden'] });
       }
     }
-    placeButtons(); mountSettings();
+    placeButtons(); mountSettings(); stopIfLeft();
   }
 
   // ---------- 가챠 포지 설정 화면 왼쪽 목록에 'TTS' 항목 ----------
@@ -964,7 +971,7 @@
   loadTtsConfig();
   setInterval(() => { if (document.visibilityState !== 'hidden') loadTtsConfig(); }, 60000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { syncPull(); loadTtsConfig(); } else { stop(); flushSync(); } });
-  addEventListener('pagehide', flushSync);
+  addEventListener('pagehide', () => { stop(); flushSync(); });
   // 같은 기기의 다른 탭에서 바꾼 설정
   addEventListener('storage', e => { if (e.key !== STORE || !e.newValue) return; try { if (mergeData(data, JSON.parse(e.newValue))) applyMerged(); } catch {} });
   // 다른 기기에서 바꾼 보이스를 새로고침 없이 받아옵니다.
