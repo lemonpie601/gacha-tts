@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.6.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.6.1 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -115,9 +115,21 @@
   }
 
   let ttsConfig = null, ttsConfigError = '', voices = [], voicesError = '';
-  async function loadTtsConfig() {
-    try { ttsConfig = await api('/api/tts/config'); ttsConfigError = ''; } catch (e) { ttsConfig = null; ttsConfigError = String(e.message || e); }
-    refresh();
+  let configReady = null;
+  function loadTtsConfig() {
+    return (configReady = (async () => {
+      try { ttsConfig = await api('/api/tts/config'); ttsConfigError = ''; } catch (e) { ttsConfig = null; ttsConfigError = String(e.message || e); }
+      refresh();
+    })());
+  }
+  // 마리나라 TTS 속도가 실제로 음성에 들어가는 경우에만 저장 이름에 붙입니다. 속도 1.0은 예전 이름 그대로라 이미 저장된 음성을 계속 씁니다.
+  // 마리나라는 ElevenLabs에 0.7~1.2로 잘라 보내고, eleven_v3에는 속도를 보내지 않습니다.
+  function speedTag() {
+    const c = ttsConfig; if (!c) return '';
+    let sp = Number(c.speed); if (!Number.isFinite(sp)) return '';
+    if (!c.source || c.source === 'elevenlabs') { if (/v3/i.test(String(c.model || ''))) return ''; sp = Math.min(1.2, Math.max(0.7, sp)); }
+    sp = Math.round(sp * 100) / 100;
+    return sp === 1 ? '' : '\u0000speed=' + sp;
   }
   async function loadVoices() {
     try {
@@ -166,10 +178,12 @@
   }
   const stats = { server: 0, made: 0, saved: 0, saveError: '' };
   function fetchClip(voice, text, speaker) {
-    const k = clipKey(voice, text);
+    // 속도를 알아야 저장 이름이 정해지므로 TTS 설정을 처음 한 번은 기다립니다.
+    if (!ttsConfig && !ttsConfigError) return (configReady || loadTtsConfig()).then(() => fetchClip(voice, text, speaker));
+    const tag = speedTag(), k = clipKey(voice, text + tag);
     if (clips.has(k)) return clips.get(k);
     const p = (async () => {
-      const useServer = data.global.serverCache !== false, name = serverName(voice, text);
+      const useServer = data.global.serverCache !== false, name = serverName(voice, text + tag);
       if (useServer) {
         const saved = await serverGet(name).catch(() => null);
         if (saved) { stats.server++; return URL.createObjectURL(saved); }
@@ -328,7 +342,10 @@
     let url, req = {};
     try {
       url = new URL(typeof input === 'string' ? input : input?.url || String(input), location.href);
-      if (url.origin !== location.origin || !url.pathname.startsWith('/api/gacha-forge/')) return result;
+      if (url.origin !== location.origin) return result;
+      // 마리나라 설정 화면에서 TTS 설정(속도 등)을 바꾸면 다시 읽습니다.
+      if (/\/api\/tts\/config\/?$/.test(url.pathname) && /^(PUT|POST|PATCH)$/i.test(init?.method || '')) { result.then(r => { if (r.ok) setTimeout(loadTtsConfig, 0); }, () => {}); return result; }
+      if (!url.pathname.startsWith('/api/gacha-forge/')) return result;
       if (typeof init?.body === 'string') { try { const b = JSON.parse(init.body); if (b && typeof b === 'object') req = b; } catch {} }
       if (req.runId) attachRun(req.runId);
     } catch { return result; }
@@ -944,12 +961,14 @@
   setTimeout(() => upgradeLoreText().catch(() => {}), 4000);
   mount();
   new MutationObserver(() => { if (!gameRoot || !gameHost?.isConnected) mount(); }).observe(document.documentElement, { childList: true, subtree: true });
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncPull(); else { stop(); flushSync(); } });
+  loadTtsConfig();
+  setInterval(() => { if (document.visibilityState !== 'hidden') loadTtsConfig(); }, 60000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { syncPull(); loadTtsConfig(); } else { stop(); flushSync(); } });
   addEventListener('pagehide', flushSync);
   // 같은 기기의 다른 탭에서 바꾼 설정
   addEventListener('storage', e => { if (e.key !== STORE || !e.newValue) return; try { if (mergeData(data, JSON.parse(e.newValue))) applyMerged(); } catch {} });
   // 다른 기기에서 바꾼 보이스를 새로고침 없이 받아옵니다.
   setInterval(() => { if (document.visibilityState !== 'hidden') syncPull(); }, 20000);
 
-  globalThis.__gfTts = { clips, mergeData, toneOf, get audio() { return audio; }, fetchClip, upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
+  globalThis.__gfTts = { clips, speedTag, loadTtsConfig, mergeData, toneOf, get audio() { return audio; }, fetchClip, upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
 })();

@@ -8,7 +8,7 @@ const native=[];win.alert=m=>native.push(['alert',m]);win.confirm=m=>{native.pus
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const calls=[];const assets=new Map();let entryContent="";let runLore={worldIds:['other'],castIds:[],worldBudget:6000,castBudget:null,beat:false};
 const json=(v,ok=true)=>new win.Response(JSON.stringify(v),{status:ok?200:404,headers:{'content-type':'application/json'}});
-const played=[];
+const played=[];let ttsCfg={enabled:true,source:'elevenlabs',model:'eleven_v3',speed:1.1,skipBracketedText:true};
 win.URL.createObjectURL=()=>'blob:x';win.URL.revokeObjectURL=()=>{};
 win.Audio=function(u){this.src=u;this.volume=1;this.playbackRate=1;this.play=async()=>{played.push(u)};this.pause=()=>{};};
 win.fetch=async(u,o={})=>{u=String(u);calls.push([o.method||'GET',u,o.body]);
@@ -20,7 +20,7 @@ win.fetch=async(u,o={})=>{u=String(u);calls.push([o.method||'GET',u,o.body]);
   if(u.endsWith('/api/lorebooks/lb1/entries/en1')){if(o.method==='PATCH'){entryContent=JSON.parse(o.body).content;return json({id:'en1'});}return json({id:'en1',content:entryContent});}
   if(u.includes('/api/lorebooks/lb1/entries')){entryContent=JSON.parse(o.body).content;return json({id:'en1'});}
   if(u.endsWith('/api/lorebooks/lb1'))return json({id:'lb1'});
-  if(u.includes('/api/tts/config'))return json({enabled:true,source:'elevenlabs',model:'eleven_v3',skipBracketedText:true});
+  if(u.includes('/api/tts/config'))return json(ttsCfg);
   if(u.includes('/api/tts/voices'))return json({voiceOptions:[{id:'v1',name:'민수'},{id:'v2',name:'지아'}]});
   if(u.startsWith('/api/game-assets/file/')){const b=assets.get(u.slice(22));return b?new win.Response(b,{status:200,headers:{'content-type':'audio/mpeg'}}):json({error:'Asset not found'},false);}
   if(u==='/api/game-assets/upload'){const f=o.body;const path=f.get('category')+'/'+f.get('subcategory')+'/'+f.get('file').name;assets.set(path,f.get('file'));return json({path});}
@@ -150,6 +150,19 @@ win.eval(src);
   assert.strictEqual(T.audio.playbackRate,1.25,'rate applied');assert.ok(Math.abs(T.audio.volume-0.5)<1e-9,'volume applied '+T.audio.volume);
   assert.ok(view2()==null);
   assert.strictEqual(T.toneOf(w1,'한도윤').rate,1,'others default');
+  // Marinara speed is part of the saved clip name, only when it reaches the voice (not eleven_v3, not 1.0)
+  assert.strictEqual(T.speedTag(),'','v3 ignores speed');
+  const cnt=()=>calls.filter(c=>c[1].includes('/api/tts/speak')).length;
+  T.clips.clear();let c0=cnt();await T.fetchClip('v1','속도 확인','한도윤');assert.strictEqual(cnt(),c0+1);
+  ttsCfg={...ttsCfg,model:'eleven_multilingual_v2',speed:1.1};await T.loadTtsConfig();assert.ok(T.speedTag().includes('1.1'));
+  T.clips.clear();c0=cnt();await T.fetchClip('v1','속도 확인','한도윤');assert.strictEqual(cnt(),c0+1,'new speed regenerates');
+  T.clips.clear();c0=cnt();await T.fetchClip('v1','속도 확인','한도윤');assert.strictEqual(cnt(),c0,'then served from server');
+  ttsCfg={...ttsCfg,speed:1.5};await T.loadTtsConfig();assert.ok(T.speedTag().includes('1.2'),'clamped like Marinara');
+  ttsCfg={...ttsCfg,speed:1};await T.loadTtsConfig();assert.strictEqual(T.speedTag(),'','1.0 keeps old names');
+  T.clips.clear();c0=cnt();await T.fetchClip('v1','속도 확인','한도윤');assert.strictEqual(cnt(),c0,'old 1.0 clip reused');
+  // Marinara saving its TTS settings is picked up
+  ttsCfg={...ttsCfg,speed:0.8};await win.fetch('/api/tts/config',{method:'PUT',body:'{}'});await sleep(30);assert.ok(T.speedTag().includes('0.8'),'reload after PUT');
+  ttsCfg={...ttsCfg,model:'eleven_v3',speed:1.1};await T.loadTtsConfig();
   // sync: a device that only played the story must not wipe a voice picked on another device
   const local={v:1,at:999999999999999,worlds:{'run-1':{...w1,speakers:{'한도윤':{name:'한도윤',voice:'',lines:9}}}},global:{},lore:{}};
   const remote={v:1,at:1,worlds:{'run-1':{speakers:{'한도윤':{name:'한도윤',voice:'v9',t:5}}}},global:{},lore:{}};
