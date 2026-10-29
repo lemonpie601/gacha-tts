@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.5.1 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.6.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -40,7 +40,7 @@
 
   // 다른 기기와 설정 동기화 (마리나라 확장 저장소, 설정만이라 작음).
   // 통째로 덮어쓰면 스토리만 진행한 기기가 다른 기기에서 고른 보이스를 지워 버리므로, 사용자가 바꾼 시각(t, gt)으로 항목별로 합칩니다.
-  const WORLD_KEYS = ['name', 'auto', 'narrate', 'narrator', 'fallback', 'emotion'];
+  const WORLD_KEYS = ['name', 'auto', 'narrate', 'narrator', 'fallback', 'emotion', 'narrVol', 'narrRate'];
   function mergeData(local, remote) {
     if (!remote || remote.v !== 1 || typeof remote.worlds !== 'object') return false;
     let changed = false;
@@ -56,7 +56,7 @@
         if (!rs || typeof rs !== 'object') continue;
         const ls = lw.speakers[k];
         if (!ls) { lw.speakers[k] = { ...rs }; changed = true; continue; }
-        if ((rs.t || 0) > (ls.t || 0)) { take(ls, rs, ['voice', 'mute']); ls.t = rs.t; }
+        if ((rs.t || 0) > (ls.t || 0)) { take(ls, rs, ['voice', 'mute', 'vol', 'rate']); ls.t = rs.t; }
         else if (!rs.t && !ls.t && !ls.voice && rs.voice) { ls.voice = rs.voice; changed = true; }
         if (rs.prota && !ls.prota) { ls.prota = true; changed = true; }
         if ((rs.lines || 0) > (ls.lines || 0)) ls.lines = rs.lines;
@@ -196,18 +196,45 @@
   }
   function stop() {
     if (audio) { audio.onended = null; audio.pause(); audio = null; }
-    playingKey = ''; paintButton();
+    playingKey = ''; playingTone = ''; paintButton();
   }
-  async function play(voice, text, speaker, key) {
+  // ---------- 인물별 음량·속도 ----------
+  // 음량은 공통 음량에 곱하고(최대 150%), 속도는 재생 속도로 바꿔 음높이는 그대로 둡니다. 다시 만들지 않으므로 요금이 들지 않습니다.
+  const VOL_MAX = 1.5, RATE_MIN = 0.5, RATE_MAX = 2;
+  const clamp = (v, lo, hi, d) => { v = Number(v); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; };
+  let playingTone = '', audioCtx = null;
+  function toneKeyOf(seg) { return NARRATOR_RE.test(seg.speaker || '') ? '__narr' : keyOf(seg.speaker); }
+  function toneOf(w, tk) {
+    if (!w || !tk) return { vol: 1, rate: 1 };
+    const o = tk === '__narr' ? { vol: w.narrVol, rate: w.narrRate } : w.speakers[tk] || {};
+    return { vol: clamp(o.vol ?? 1, 0, VOL_MAX, 1), rate: clamp(o.rate ?? 1, RATE_MIN, RATE_MAX, 1) };
+  }
+  function applyTone(a, tone) {
+    const gain = clamp(data.global.volume, 0, 1, 1) * tone.vol;
+    a.preservesPitch = true; a.mozPreservesPitch = true; a.webkitPreservesPitch = true;
+    a.defaultPlaybackRate = tone.rate; a.playbackRate = tone.rate;
+    if (gain <= 1 && !a.__gain) { a.volume = gain; return; }
+    // 100%를 넘기면 Web Audio로 키웁니다. 쓸 수 없으면 100%로 둡니다.
+    try {
+      if (!a.__gain) {
+        audioCtx = audioCtx || new (globalThis.AudioContext || globalThis.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+        const g = audioCtx.createGain(); audioCtx.createMediaElementSource(a).connect(g); g.connect(audioCtx.destination); a.__gain = g;
+      }
+      a.volume = 1; a.__gain.gain.value = gain;
+    } catch { a.volume = Math.min(1, gain); }
+  }
+  function retone() { const w = current(); if (audio && playingTone) applyTone(audio, toneOf(w, playingTone)); }
+  async function play(voice, text, speaker, key, tk) {
     if (!voice || !text) return;
     stop();
-    playingKey = key || clipKey(voice, text); paintButton();
+    playingKey = key || clipKey(voice, text); playingTone = tk || ''; paintButton();
     const mine = playingKey;
     try {
       const url = await fetchClip(voice, text, speaker);
       if (playingKey !== mine) return;
       audio = new Audio(url);
-      audio.volume = Math.max(0, Math.min(1, Number(data.global.volume) || 0));
+      applyTone(audio, toneOf(current(), playingTone));
       audio.onended = () => { if (playingKey === mine) { playingKey = ''; audio = null; paintButton(); } };
       await audio.play();
       lastError = '';
@@ -389,7 +416,7 @@
   function speak(w, seg, id) {
     lastLine = { id, speaker: seg.speaker, text: seg.text, plain: seg.plain, voice: voiceFor(w, seg) };
     refresh();
-    if (w.auto && lastLine.voice) play(lastLine.voice, speechText(lastLine.text), lastLine.speaker, id);
+    if (w.auto && lastLine.voice) play(lastLine.voice, speechText(lastLine.text), lastLine.speaker, id, toneKeyOf(seg));
   }
   // 대답 선택지를 고른 뒤 나오는 답 대사: 대사 번호가 그대로라 화면 글자로만 구분합니다.
   function branchTick(vn) {
@@ -415,7 +442,7 @@
     if (!lastLine) return notify('아직 인식한 대사가 없습니다. 스토리를 진행해 주세요.');
     const w = current(); const voice = w ? voiceFor(w, lastLine) : '';
     if (!voice) return notify((lastLine.speaker || '내레이션') + '에 지정된 보이스가 없습니다. 설정 → TTS에서 지정해 주세요.', 'bad');
-    play(voice, speechText(lastLine.text), lastLine.speaker, lastLine.id);
+    play(voice, speechText(lastLine.text), lastLine.speaker, lastLine.id, toneKeyOf(lastLine));
   }
 
   // ---------- 감정 태그 로어북 (한 번 만들어 두고 월드에 들어올 때 연결) ----------
@@ -597,11 +624,15 @@
 .gtts-good{color:var(--jade,#3cc9a0)}
 .gtts-two{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2,10px) var(--sp-3,16px)}
 .gtts-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1,6px)}
-.gtts-spk{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto auto;align-items:center;gap:var(--sp-1,6px) var(--sp-2,10px);padding:calc(var(--f,10px)*.35) 0;border-top:1px solid var(--steel-dark,#34435e)}
+.gtts-spk{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto auto auto;align-items:center;gap:var(--sp-1,6px) var(--sp-2,10px);padding:calc(var(--f,10px)*.35) 0;border-top:1px solid var(--steel-dark,#34435e)}
 .gtts-spk:first-child{border-top:0}
 .gtts-spk .nm{font-family:var(--display,inherit);font-weight:700;font-size:var(--t-sm,13px);color:var(--text,#e8ecf6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gtts-spk .nm small{font-weight:500;font-size:var(--t-tiny,11px);color:var(--steel-faint,#7e93ae);margin-left:.4em}
 .gtts-spk select{min-width:0;width:100%}
+.gtts-tone{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr auto;align-items:center;gap:var(--sp-1,6px) var(--sp-3,16px);padding:0 0 calc(var(--f,10px)*.3)}
+.gtts-tone label{display:flex;align-items:center;gap:var(--sp-1,6px);font-size:var(--t-tiny,11px);color:var(--steel-faint,#7e93ae);white-space:nowrap}
+.gtts-tone output{min-width:3.2em;text-align:right;color:var(--text,#e8ecf6);font-variant-numeric:tabular-nums}
+.gtts-spk .st-chip[aria-pressed="true"]{border-color:var(--coral,#f2643c);color:var(--coral,#f2643c)}
 .gtts-line{font-size:var(--t-sm,13px);line-height:1.6;color:var(--text,#e8ecf6);padding:calc(var(--f,10px)*.6) calc(var(--f,10px)*.8);border-left:3px solid var(--coral,#f2643c);background:color-mix(in srgb,var(--ink-2,#1a2436) 82%,transparent)}
 .gtts-line i{font-style:normal;color:var(--epic,#a77bff);font-size:.85em}
 .gtts-view input[type=range]{accent-color:var(--coral,#f2643c);width:100%}
@@ -609,16 +640,28 @@
 .gtts-view .ob-toggle .ob-bx[aria-checked="false"] span{visibility:hidden}
 .gtts-view .st-compress[disabled]{opacity:.45;cursor:default}
 .gtts-view .st-compress.-go{background:var(--coral,#f2643c);border-color:var(--coral,#f2643c);color:var(--on-coral,#fff)}
-@media (max-width:760px){.gtts-two{grid-template-columns:1fr}.gtts-spk{grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) auto}.gtts-spk .gtts-mute{display:none}}
+@media (max-width:760px){.gtts-two{grid-template-columns:1fr}.gtts-spk{grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) auto auto}.gtts-spk .gtts-mute{display:none}.gtts-tone{grid-template-columns:1fr}}
 `;
-  const view = { root: document.createElement('div'), body: null, shown: false, tab: null, rail: null, pane: null, hidden: [], deselected: [], title: null };
+  const view = { tone: new Set(), root: document.createElement('div'), body: null, shown: false, tab: null, rail: null, pane: null, hidden: [], deselected: [], title: null };
   view.root.className = 'gtts-view';
   view.root.setAttribute('data-gtts-view', '1');
   view.root.innerHTML = '<style>' + CSS + '</style><div class="gtts-body" style="display:contents"></div>';
   view.body = view.root.lastChild;
   view.root.addEventListener('click', onClick);
   view.root.addEventListener('change', onChange);
-  view.root.addEventListener('input', e => { if (e.target.dataset.g === 'volume') { data.global.volume = Number(e.target.value); if (audio) audio.volume = data.global.volume; } });
+  view.root.addEventListener('input', e => {
+    const t = e.target;
+    if (t.dataset.g === 'volume') { data.global.volume = Number(t.value); retone(); return; }
+    // 인물별 음량·속도: 끌면 재생 중인 음성에 바로 반영합니다.
+    if (t.dataset.tone) {
+      const w = world(t.dataset.run); if (!w) return;
+      const tk = t.dataset.tk, field = t.dataset.tone, v = Number(t.value);
+      if (tk === '__narr') { w[field === 'vol' ? 'narrVol' : 'narrRate'] = v; touched(w); }
+      else { const sp = w.speakers[tk]; if (!sp) return; sp[field] = v; touched(sp); }
+      const out = t.parentElement?.querySelector('output'); if (out) out.textContent = toneLabel(field, v);
+      if (playingTone === tk) retone();
+    }
+  });
 
   function findSettings() {
     for (const s of gameRoot?.querySelectorAll('[data-screen="settings"]') || []) if (s.isConnected && s.getClientRects().length) return s;
@@ -701,6 +744,17 @@
       '<span class="gtts-sub">보이스: ' + (L.voice ? '<b>' + esc(voices.find(v => v.id === L.voice)?.name || L.voice) + '</b>' : '<span class="gtts-bad">지정 안 됨</span>') + '</span></div>' +
       (lastError ? '<p class="gtts-sub gtts-bad">' + esc(lastError) + '</p>' : '');
   }
+  const toneLabel = (field, v) => field === 'vol' ? Math.round(clamp(v ?? 1, 0, VOL_MAX, 1) * 100) + '%' : '×' + clamp(v ?? 1, RATE_MIN, RATE_MAX, 1).toFixed(2);
+  const toneSet = o => clamp(o.vol ?? 1, 0, VOL_MAX, 1) !== 1 || clamp(o.rate ?? 1, RATE_MIN, RATE_MAX, 1) !== 1;
+  // 조절 버튼: 기본값과 다르면 강조합니다.
+  const toneChip = (k, o) => '<button class="st-chip" type="button" data-act="tone" data-tk="' + esc(k) + '" aria-pressed="' + (view.tone.has(k) || toneSet(o)) + '" title="음량·속도">' + (toneSet(o) ? toneLabel('vol', o.vol) + ' ' + toneLabel('rate', o.rate) : '조절') + '</button>';
+  function toneRow(runId, k, vol, rate) {
+    const a = ' data-run="' + esc(runId) + '" data-tk="' + esc(k) + '"';
+    return '<div class="gtts-tone">' +
+      '<label>음량 <input type="range" min="0" max="' + VOL_MAX + '" step="0.05" data-tone="vol"' + a + ' value="' + clamp(vol ?? 1, 0, VOL_MAX, 1) + '"><output>' + toneLabel('vol', vol) + '</output></label>' +
+      '<label>속도 <input type="range" min="' + RATE_MIN + '" max="' + RATE_MAX + '" step="0.05" data-tone="rate"' + a + ' value="' + clamp(rate ?? 1, RATE_MIN, RATE_MAX, 1) + '"><output>' + toneLabel('rate', rate) + '</output></label>' +
+      btn('기본값', 'tone-reset', a) + '</div>';
+  }
   function render() {
     if (!view.shown) return;
     const keep = view.root.scrollTop, runId = data.world, w = current(), G = data.global;
@@ -712,8 +766,10 @@
     const speakers = Object.entries(w.speakers).sort((a, b) => (b[1].prota ? 1 : 0) - (a[1].prota ? 1 : 0) || (b[1].lines || 0) - (a[1].lines || 0));
     const rows = speakers.map(([k, s]) => '<div class="gtts-spk"><span class="nm" title="' + esc(s.name) + '">' + esc(s.name) + (s.prota ? '<small>주인공</small>' : s.lines ? '<small>' + s.lines + '줄</small>' : '') + '</span>' +
       voiceSelect('data-spk="' + esc(k) + '"' + r, s.voice || '', w.fallback ? '기본 보이스 사용' : '읽지 않음') +
-      btn('▶', 'preview', 'data-voice="' + esc(s.voice || w.fallback || '') + '" title="미리 듣기"' + (s.voice || w.fallback ? '' : ' disabled')) +
-      '<button class="st-chip gtts-mute" type="button" data-mute="' + esc(k) + '"' + r + ' aria-pressed="' + !!s.mute + '">끔</button></div>').join('');
+      btn('▶', 'preview', 'data-voice="' + esc(s.voice || w.fallback || '') + '" data-tk="' + esc(k) + '" title="미리 듣기"' + (s.voice || w.fallback ? '' : ' disabled')) +
+      toneChip(k, s) +
+      '<button class="st-chip gtts-mute" type="button" data-mute="' + esc(k) + '"' + r + ' aria-pressed="' + !!s.mute + '">끔</button>' +
+      (view.tone.has(k) ? toneRow(runId, k, s.vol, s.rate) : '') + '</div>').join('');
     const st = linkedState(runId), L = data.lore;
     view.body.innerHTML =
       plate('현재 대사', esc(w.name), nowHtml(w)) +
@@ -723,7 +779,8 @@
         toggle('data-w="narrate"' + r, w.narrate, '내레이션도 읽기', '내레이터 보이스를 골라 주세요') + '</div>' +
         '<div class="gtts-two">' +
         '<div class="ob-field"><div class="ob-labelrow"><label>기본 보이스</label></div>' + voiceSelect('data-wv="fallback"' + r, w.fallback, '읽지 않음') + '<span class="gtts-sub">보이스를 지정하지 않은 인물에게 씁니다</span></div>' +
-        (w.narrate ? '<div class="ob-field"><div class="ob-labelrow"><label>내레이터</label></div>' + voiceSelect('data-wv="narrator"' + r, w.narrator, '읽지 않음') + '</div>' : '') + '</div>') +
+        (w.narrate ? '<div class="ob-field"><div class="ob-labelrow"><label>내레이터</label></div>' + voiceSelect('data-wv="narrator"' + r, w.narrator, '읽지 않음') + '</div>' : '') + '</div>' +
+        (w.narrate ? '<div class="gtts-spk"><span class="nm">내레이터 음량·속도</span><span></span>' + btn('▶', 'preview', 'data-voice="' + esc(w.narrator || '') + '" data-tk="__narr" title="미리 듣기"' + (w.narrator ? '' : ' disabled')) + toneChip('__narr', { vol: w.narrVol, rate: w.narrRate }) + '<span></span>' + (view.tone.has('__narr') ? toneRow(runId, '__narr', w.narrVol, w.narrRate) : '') + '</div>' : '')) +
       plate('인물별 보이스', '이 월드',
         '<p class="gtts-sub">장면에 나온 화자가 자동으로 추가됩니다. 보이스는 이 월드에만 적용됩니다.</p>' +
         '<div>' + (rows || '<p class="gtts-sub">아직 인식한 화자가 없습니다.</p>') + '</div>' +
@@ -832,7 +889,14 @@
     if (t.dataset.mute && w) { const s = w.speakers[t.dataset.mute]; if (s) { s.mute = !s.mute; touched(s); save(); if (lastLine && current() === w) lastLine.voice = voiceFor(w, lastLine); } return refresh(); }
     const act = t.dataset.act;
     if (act === 'replay') { replay(); return refresh(); }
-    if (act === 'preview') { const v = t.dataset.voice; if (v) play(v, SAMPLE_TEXT, '', 'preview:' + v); return; }
+    if (act === 'preview') { const v = t.dataset.voice; if (v) play(v, SAMPLE_TEXT, '', 'preview:' + v, t.dataset.tk || ''); return; }
+    if (act === 'tone') { const k = t.dataset.tk; view.tone.has(k) ? view.tone.delete(k) : view.tone.add(k); return refresh(); }
+    if (act === 'tone-reset' && w) {
+      const k = t.dataset.tk;
+      if (k === '__narr') { w.narrVol = 1; w.narrRate = 1; touched(w); }
+      else { const sp = w.speakers[k]; if (sp) { sp.vol = 1; sp.rate = 1; touched(sp); } }
+      save(); retone(); return refresh();
+    }
     if (act === 'reload-voices') return busy(t, loadVoices);
     if (act === 'add-speaker' && w) { ask('화자 추가', '가챠 포지 대사에 표시되는 이름 그대로 적어 주세요.', { input: true, ok: '추가' }).then(n => { if (n && n.trim() && rememberSpeaker(w, n)) { save(); refresh(); } }); return; }
     if (act === 'link' && w) { w.emotion = true; touched(w); return busy(t, () => connect(run, true)); }
@@ -858,6 +922,7 @@
   function onChange(e) {
     const t = e.target, run = t.dataset.run, w = world(run);
     if (t.dataset.g === 'volume') { data.gt = Date.now(); save(); return; }
+    if (t.dataset.tone) { save(); return refresh(); }
     if (!w || t.tagName !== 'SELECT') return;
     if (t.value === '__custom') {
       ask('보이스 ID 입력', 'ElevenLabs 보이스 ID를 입력해 주세요.', { input: true }).then(v => { v = (v || '').trim(); if (v) setVoice(t, w, v); else refresh(); });
@@ -886,5 +951,5 @@
   // 다른 기기에서 바꾼 보이스를 새로고침 없이 받아옵니다.
   setInterval(() => { if (document.visibilityState !== 'hidden') syncPull(); }, 20000);
 
-  globalThis.__gfTts = { clips, mergeData, fetchClip, upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
+  globalThis.__gfTts = { clips, mergeData, toneOf, get audio() { return audio; }, fetchClip, upgradeLoreText, LORE_TEXT_V1, matchLine, norm, stripTags, stripDeep, voiceFor, cleanLore, loreText, get data() { return data; }, get beats() { return beats; } };
 })();

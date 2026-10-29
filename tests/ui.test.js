@@ -10,7 +10,7 @@ const calls=[];const assets=new Map();let entryContent="";let runLore={worldIds:
 const json=(v,ok=true)=>new win.Response(JSON.stringify(v),{status:ok?200:404,headers:{'content-type':'application/json'}});
 const played=[];
 win.URL.createObjectURL=()=>'blob:x';win.URL.revokeObjectURL=()=>{};
-win.Audio=function(u){this.src=u;this.play=async()=>{played.push(u)};this.pause=()=>{};};
+win.Audio=function(u){this.src=u;this.volume=1;this.playbackRate=1;this.play=async()=>{played.push(u)};this.pause=()=>{};};
 win.fetch=async(u,o={})=>{u=String(u);calls.push([o.method||'GET',u,o.body]);
   if(u.includes('/api/gacha-forge/beat-choice'))return json({ok:true,beat:{chapter:4,storyIndex:0,segments:[{speaker:'한도윤',text:'[curious] 같이 갈래?',choice:{key:'abcdef12',options:[{label:'좋아',lines:[{speaker:'홍길동',text:'[happy] 좋아, 가자.'},{speaker:'한도윤',text:'[warm] 그래.'}]},{label:'싫어',lines:[{speaker:'홍길동',text:'[cold] 싫어.'}]}]}},{speaker:'',text:'둘은 길을 나섰다.'}]}});
   if(u.includes('/api/gacha-forge/beat'))return json({ok:true,cast:[{name:'한도윤'},{name:'홍길동',prota:true}],segments:[{speaker:'',text:'바람이 분다.'},{speaker:'한도윤',text:'[excited] 가자! [whispers] 조용히.'},{speaker:'[시스템]',text:'[시스템] 알림'}]});
@@ -137,6 +137,19 @@ win.eval(src);
   assert.strictEqual(JSON.parse(sp[2][2]).voice,'v1');
   // name variant falls back to the speaker that has a voice
   assert.strictEqual(T.voiceFor(w1,{speaker:'도윤'}),'v1','alias voice');
+  // per-speaker volume / speed: applied to playback without regenerating
+  const view2=()=>sr.querySelector('[data-gtts-view]');
+  sr.querySelector('.st-rail [data-gtts="tab"]').click();await sleep(50);
+  view2().querySelector('[data-act="tone"][data-tk="홍길동"]').click();await sleep(20);
+  const vr=view2().querySelector('input[data-tone="vol"][data-tk="홍길동"]'),rr=view2().querySelector('input[data-tone="rate"][data-tk="홍길동"]');assert.ok(vr&&rr,'tone sliders');
+  vr.value='0.5';vr.dispatchEvent(new win.Event('input',{bubbles:true}));rr.value='1.25';rr.dispatchEvent(new win.Event('input',{bubbles:true}));rr.dispatchEvent(new win.Event('change',{bubbles:true}));
+  assert.strictEqual(JSON.stringify(T.toneOf(w1,'홍길동')),'{"vol":0.5,"rate":1.25}');
+  const sp1=calls.filter(c=>c[1].includes('/api/tts/speak')).length;
+  sr.querySelector('.st-sect:not([data-gtts])').click();await sleep(30);
+  sr.querySelector('.vn-line').textContent='같이 갈래?';await sleep(50);sr.querySelector('.vn-line').textContent='싫어.';await sleep(400);
+  assert.strictEqual(T.audio.playbackRate,1.25,'rate applied');assert.ok(Math.abs(T.audio.volume-0.5)<1e-9,'volume applied '+T.audio.volume);
+  assert.ok(view2()==null);
+  assert.strictEqual(T.toneOf(w1,'한도윤').rate,1,'others default');
   // sync: a device that only played the story must not wipe a voice picked on another device
   const local={v:1,at:999999999999999,worlds:{'run-1':{...w1,speakers:{'한도윤':{name:'한도윤',voice:'',lines:9}}}},global:{},lore:{}};
   const remote={v:1,at:1,worlds:{'run-1':{speakers:{'한도윤':{name:'한도윤',voice:'v9',t:5}}}},global:{},lore:{}};
