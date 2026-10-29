@@ -1,4 +1,4 @@
-/* 가챠 TTS v0.7.0 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
+/* 가챠 TTS v0.7.1 — Gacha Forge 대사 음성(ElevenLabs via Marinara TTS). 월드별 보이스 설정, 감정 태그 로어북 연결. */
 (() => {
   'use strict';
   if (globalThis.__gfTtsExtension) return;
@@ -40,7 +40,7 @@
 
   // 다른 기기와 설정 동기화 (마리나라 확장 저장소, 설정만이라 작음).
   // 통째로 덮어쓰면 스토리만 진행한 기기가 다른 기기에서 고른 보이스를 지워 버리므로, 사용자가 바꾼 시각(t, gt)으로 항목별로 합칩니다.
-  const WORLD_KEYS = ['name', 'auto', 'narrate', 'narrator', 'fallback', 'emotion', 'narrVol', 'narrRate', 'fallbackF', 'fallbackM'];
+  const WORLD_KEYS = ['name', 'auto', 'narrate', 'narrator', 'fallback', 'emotion', 'narrVol', 'narrRate', 'fallbackF', 'fallbackM', 'fallbackN'];
   function mergeData(local, remote) {
     if (!remote || remote.v !== 1 || typeof remote.worlds !== 'object') return false;
     let changed = false;
@@ -406,7 +406,8 @@
     return s?.voice || aliasVoice(w, k) || genderVoice(w, s || aliasOf(w, k)) || w.fallback || '';
   }
   // 성별별 기본 보이스: 인물에 성별이 정해져 있고 그 성별의 기본 보이스가 있을 때.
-  function genderVoice(w, s) { return s?.gender === 'f' ? w.fallbackF || '' : s?.gender === 'm' ? w.fallbackM || '' : ''; }
+  const GENDER = { f: '여자', m: '남자', n: '성별 없음' }, GENDER_CHIP = { f: '여', m: '남', n: '없음' };
+  function genderVoice(w, s) { return s?.gender === 'f' ? w.fallbackF || '' : s?.gender === 'm' ? w.fallbackM || '' : s?.gender === 'n' ? w.fallbackN || '' : ''; }
   function defaultFor(w, s) { return genderVoice(w, s) || w.fallback || ''; }
   function aliasOf(w, k) {
     if (k.length < 2) return null;
@@ -420,6 +421,7 @@
     const g = raw.trim().toLowerCase();
     if (/^(f|female|woman|girl|she|여|여성|여자|소녀)/.test(g)) return 'f';
     if (/^(m|male|man|boy|he|남|남성|남자|소년)/.test(g)) return 'm';
+    if (/^(none|non-?binary|genderless|agender|neutral|it|없음|무성|중성)\b/.test(g) || /^(없음|무성|중성)/.test(g)) return 'n';
     return '';
   }
   // 대사의 화자 이름이 등장인물 이름과 조금 다를 때(예: '도윤' / '한도윤') 보이스를 지정한 쪽을 씁니다. 후보가 하나일 때만.
@@ -838,9 +840,9 @@
     const r = ' data-run="' + esc(runId) + '"';
     const speakers = Object.entries(w.speakers).sort((a, b) => (b[1].prota ? 1 : 0) - (a[1].prota ? 1 : 0) || (b[1].lines || 0) - (a[1].lines || 0));
     const rows = speakers.map(([k, s]) => '<div class="gtts-spk"><span class="nm" title="' + esc(s.name) + '">' + esc(s.name) + (s.prota ? '<small>주인공</small>' : s.lines ? '<small>' + s.lines + '줄</small>' : '') + '</span>' +
-      voiceSelect('data-spk="' + esc(k) + '"' + r, s.voice || '', defaultFor(w, s) ? (genderVoice(w, s) ? (s.gender === 'f' ? '여자' : '남자') + ' 기본 보이스 사용' : '기본 보이스 사용') : '읽지 않음') +
+      voiceSelect('data-spk="' + esc(k) + '"' + r, s.voice || '', defaultFor(w, s) ? (genderVoice(w, s) ? GENDER[s.gender] + ' 기본 보이스 사용' : '기본 보이스 사용') : '읽지 않음') +
       btn('▶', 'preview', 'data-voice="' + esc(s.voice || defaultFor(w, s)) + '" data-tk="' + esc(k) + '" title="미리 듣기"' + (s.voice || defaultFor(w, s) ? '' : ' disabled')) +
-      '<button class="st-chip" type="button" data-act="gender" data-k="' + esc(k) + '"' + r + ' aria-pressed="' + !!s.gender + '" title="성별: 누르면 바뀝니다 (여 → 남 → 미정)">' + (s.gender === 'f' ? '여' : s.gender === 'm' ? '남' : '성별') + '</button>' +
+      '<button class="st-chip" type="button" data-act="gender" data-k="' + esc(k) + '"' + r + ' aria-pressed="' + !!s.gender + '" title="성별: 누르면 바뀝니다 (여 → 남 → 없음 → 미정)">' + (GENDER_CHIP[s.gender] || '성별') + '</button>' +
       toneChip(k, s) +
       '<button class="st-chip gtts-mute" type="button" data-mute="' + esc(k) + '"' + r + ' aria-pressed="' + !!s.mute + '">끔</button>' +
       (view.tone.has(k) ? toneRow(runId, k, s.vol, s.rate) : '') + '</div>').join('');
@@ -855,6 +857,7 @@
         '<div class="ob-field"><div class="ob-labelrow"><label>기본 보이스</label></div>' + voiceSelect('data-wv="fallback"' + r, w.fallback, '읽지 않음') + '<span class="gtts-sub">보이스를 지정하지 않은 인물에게 씁니다</span></div>' +
         '<div class="ob-field"><div class="ob-labelrow"><label>여자 기본 보이스</label></div>' + voiceSelect('data-wv="fallbackF"' + r, w.fallbackF || '', w.fallback ? '기본 보이스 사용' : '읽지 않음') + '<span class="gtts-sub">성별을 [여]로 정한 인물</span></div>' +
         '<div class="ob-field"><div class="ob-labelrow"><label>남자 기본 보이스</label></div>' + voiceSelect('data-wv="fallbackM"' + r, w.fallbackM || '', w.fallback ? '기본 보이스 사용' : '읽지 않음') + '<span class="gtts-sub">성별을 [남]으로 정한 인물</span></div>' +
+        '<div class="ob-field"><div class="ob-labelrow"><label>성별 없음 기본 보이스</label></div>' + voiceSelect('data-wv="fallbackN"' + r, w.fallbackN || '', w.fallback ? '기본 보이스 사용' : '읽지 않음') + '<span class="gtts-sub">성별을 [없음]으로 정한 인물 (로봇·괴물 등)</span></div>' +
         (w.narrate ? '<div class="ob-field"><div class="ob-labelrow"><label>내레이터</label></div>' + voiceSelect('data-wv="narrator"' + r, w.narrator, '읽지 않음') + '</div>' : '') + '</div>' +
         (w.narrate ? '<div class="gtts-spk"><span class="nm">내레이터 음량·속도</span><span></span>' + btn('▶', 'preview', 'data-voice="' + esc(w.narrator || '') + '" data-tk="__narr" title="미리 듣기"' + (w.narrator ? '' : ' disabled')) + '<span></span>' + toneChip('__narr', { vol: w.narrVol, rate: w.narrRate }) + '<span></span>' + (view.tone.has('__narr') ? toneRow(runId, '__narr', w.narrVol, w.narrRate) : '') + '</div>' : '')) +
       plate('인물별 보이스', '이 월드',
@@ -968,7 +971,7 @@
     if (act === 'preview') { const v = t.dataset.voice; if (v) play(v, SAMPLE_TEXT, '', 'preview:' + v, t.dataset.tk || ''); return; }
     if (act === 'gender' && w) {
       const sp = w.speakers[t.dataset.k];
-      if (sp) { sp.gender = sp.gender === 'f' ? 'm' : sp.gender === 'm' ? '' : 'f'; sp.gUser = true; touched(sp); save(); if (lastLine && current() === w) lastLine.voice = voiceFor(w, lastLine); }
+      if (sp) { sp.gender = { '': 'f', f: 'm', m: 'n', n: '' }[sp.gender || ''] ?? ''; sp.gUser = true; touched(sp); save(); if (lastLine && current() === w) lastLine.voice = voiceFor(w, lastLine); }
       return refresh();
     }
     if (act === 'tone') { const k = t.dataset.tk; view.tone.has(k) ? view.tone.delete(k) : view.tone.add(k); return refresh(); }
